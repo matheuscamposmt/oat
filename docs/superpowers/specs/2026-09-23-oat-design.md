@@ -54,7 +54,7 @@ oat is one binary with five subcommands. The HUD and the MCP server share no mem
 | Command | Behavior |
 |---|---|
 | `oat` | Opens the home screen with the list of meetings |
-| `oat new [title] [--lang xx]` | Starts a recording at once |
+| `oat new [title] [--lang xx]` | Starts a recording at once. The flags can come before or after the title |
 | `oat mcp` | Runs the MCP server on stdio. Claude Code starts it |
 | `oat doctor` | Tests the environment and prints a fix for each failure |
 | `oat setup` | Registers the MCP server in Claude Code |
@@ -175,7 +175,7 @@ The workers append the other segments to `transcript.jsonl` and send them to the
 
 | Groq response | Behavior |
 |---|---|
-| 200 | Save the segments. Delete the WAV file, unless `keep_audio` is true |
+| 200 | Save the segments. Delete the WAV file. With `keep_audio`, move it to `audio/` |
 | 429 | Wait for the seconds in `retry-after`. Without the header, wait 10 s. Send again |
 | 5xx or network error | Retry with backoff: 2, 4, 8, 16, 32, then 60 s for each retry after that |
 | 401 | Stop the workers. Keep the chunks on disk. The HUD shows a red banner: "Groq rejected the API key" |
@@ -206,6 +206,7 @@ The meeting ID is the folder name: `YYYY-MM-DD-HHMM-<slug>`. The slug comes from
 | `summary.md` | The notes that Claude writes through MCP |
 | `.lock` | The PID of the process that records |
 | `chunks/`, `failed/` | WAV files that wait for Groq, or that Groq refused |
+| `audio/` | WAV files that `keep_audio` keeps after transcription |
 
 The status of a meeting is `recording`, `processing`, `done`, or `interrupted`. At stop, the status changes to `processing` while chunks remain, then to `done`. If a meeting has the status `recording` or `processing` and the PID in `.lock` is not alive, oat changes the status to `interrupted`. The drain then sends the leftover chunks, and the status becomes `done`.
 
@@ -272,7 +273,7 @@ The meters show the level of each stream, with a short history and a bar. The tr
 | `ctrl+l` | Change the language for the next chunks: `pt`, `en`, `auto` |
 | `ctrl+s` | Stop and save |
 | `ctrl+c` | Ask "Stop and save? y/n". oat never discards a recording |
-| `?` | Show the help overlay |
+| `?` | Show the help overlay. This key works in the transcript pane. In the notes pane, it types a question mark |
 | Arrows, `pgup`, `pgdn`, `end` | Scroll the transcript. `end` follows the newest line again |
 
 After the stop, the screen shows the progress of the queue. When the queue is empty, it shows the folder path and the hint `/mcp__oat__enhance`, then it goes back to the home screen. If you press `q` during the drain, oat quits, and the next start finishes the drain.
