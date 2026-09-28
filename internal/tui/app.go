@@ -45,20 +45,27 @@ type (
 )
 
 type app struct {
-	deps    Deps
-	ctx     context.Context
-	screen  screen
-	home    homeModel
-	rec     recordModel
-	recOn   bool
-	view    viewerModel
-	width   int
-	height  int
-	drainCh chan any
+	deps           Deps
+	ctx            context.Context
+	screen         screen
+	home           homeModel
+	rec            recordModel
+	recOn          bool
+	starting       bool // from the start request until Start returns
+	quitAfterStart bool // a quit or a signal came during the start
+	view           viewerModel
+	width          int
+	height         int
+	drainCh        chan any
 }
 
 func newApp(ctx context.Context, d Deps) app {
-	return app{deps: d, ctx: ctx, home: newHomeModel(d.Theme, d.Store), drainCh: make(chan any, 256)}
+	a := app{deps: d, ctx: ctx, home: newHomeModel(d.Theme, d.Store), drainCh: make(chan any, 256)}
+	if d.AutoStart {
+		// Init cannot change the model, so mark the AutoStart start here.
+		a.starting, a.home.starting = true, true
+	}
+	return a
 }
 
 func waitDrain(ch <-chan any) tea.Cmd {
@@ -100,18 +107,30 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(c1, c2, c3)
 	case startRecordingMsg:
-		if a.recOn {
+		if a.recOn || a.starting {
 			return a, nil
 		}
+		a.starting, a.home.starting = true, true
 		return a, a.startCmd(msg.title)
 	case sessionStartedMsg:
+		a.starting, a.home.starting = false, false
+		if a.quitAfterStart {
+			rec := msg.rec
+			return a, func() tea.Msg {
+				rec.Abandon()
+				return tea.Quit()
+			}
+		}
 		a.rec = newRecordModel(a.deps.Theme, msg.rec)
 		a.recOn, a.screen = true, recordScreen
 		a.rec, _ = a.rec.Update(a.size())
 		return a, a.rec.Init()
 	case sessionErrMsg:
+		a.starting, a.home.starting = false, false
+		if a.quitAfterStart {
+			return a, tea.Quit
+		}
 		a.home.err = "Could not start the recording: " + msg.err.Error()
-		a.screen = homeScreen
 		return a, nil
 	case openMeetingMsg:
 		v, err := newViewerModel(a.deps.Theme, a.deps.Store, msg.id)
@@ -123,6 +142,11 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.screen = viewerScreen
 		return a, nil
 	case backHomeMsg:
+		// A message from another screen is stale, for example the 4 s timer
+		// of a stopped recording after the user opened the viewer.
+		if msg.from != a.screen {
+			return a, nil
+		}
 		if a.screen == recordScreen && !a.rec.stopped {
 			return a, nil
 		}
@@ -147,6 +171,17 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				rec.Abandon()
 				return tea.Quit()
 			}
+		}
+		if a.starting {
+			// A signal during the start: quit when Start returns, after Abandon.
+			a.quitAfterStart = true
+			return a, nil
+		}
+		return a, tea.Quit
+	case quitRequestMsg:
+		if a.starting {
+			a.quitAfterStart = true
+			return a, nil
 		}
 		return a, tea.Quit
 	}

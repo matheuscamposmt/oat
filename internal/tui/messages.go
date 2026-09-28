@@ -10,8 +10,9 @@ import (
 type (
 	startRecordingMsg struct{ title string }
 	openMeetingMsg    struct{ id string }
-	backHomeMsg       struct{}
+	backHomeMsg       struct{ from screen }
 	quitDuringDrain   struct{}
+	quitRequestMsg    struct{}
 )
 
 // Messages of the recording screen.

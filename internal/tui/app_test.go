@@ -117,8 +117,8 @@ func TestViewerShowsAndEditsNotes(t *testing.T) {
 		t.Fatalf("notes.md = %q", notes)
 	}
 	_, cmd := v.Update(key("esc"))
-	if _, ok := cmd().(backHomeMsg); !ok {
-		t.Fatal("esc did not go back home")
+	if msg, ok := cmd().(backHomeMsg); !ok || msg.from != viewerScreen {
+		t.Fatal("esc did not go back home from the viewer")
 	}
 }
 
@@ -174,5 +174,79 @@ func TestAppSignalSavesNotes(t *testing.T) {
 	}
 	if notes, _ := f.m.Notes(); notes != "x" {
 		t.Fatalf("notes.md = %q, want %q", notes, "x")
+	}
+}
+
+func TestAppIgnoresSecondStartWhileStarting(t *testing.T) {
+	f := newFakeRecorder(t)
+	calls := 0
+	a := newApp(context.Background(), Deps{Store: store.New(t.TempDir()), Theme: theme, Start: func(ctx context.Context, title string) (Recorder, error) {
+		calls++
+		return f, nil
+	}})
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	model, first := model.Update(startRecordingMsg{"a"})
+	_, second := model.Update(startRecordingMsg{"b"})
+	if first == nil || second != nil {
+		t.Fatalf("start commands: first %v, second %v, want only the first", first != nil, second != nil)
+	}
+	if _, ok := first().(sessionStartedMsg); !ok || calls != 1 {
+		t.Fatalf("Start calls: %d, want 1", calls)
+	}
+}
+
+func TestAppQuitDuringStartAbandons(t *testing.T) {
+	f := newFakeRecorder(t)
+	a := newApp(context.Background(), Deps{Store: store.New(t.TempDir()), Theme: theme, Start: func(ctx context.Context, title string) (Recorder, error) {
+		return f, nil
+	}})
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	model, start := model.Update(startRecordingMsg{"x"})
+	model, cmd := model.Update(key("q"))
+	model, _ = model.Update(cmd())
+	_, cmd = model.Update(start())
+	if cmd == nil {
+		t.Fatal("no command after the start")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok || !f.abandoned {
+		t.Fatalf("quit during the start: got %T, abandoned %v", cmd(), f.abandoned)
+	}
+}
+
+func TestHomeRowShowsTitleAt60Columns(t *testing.T) {
+	st := store.New(t.TempDir())
+	m, err := st.Create("Weekly sync", time.Date(2026, 9, 22, 10, 0, 0, 0, time.Local), "pt", "m", "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Update(func(meta *store.Meta) {
+		meta.Status = store.Done
+		meta.EndedAt = meta.StartedAt.Add(30 * time.Minute)
+	})
+	m.Unlock()
+	h := newHomeModel(theme, st)
+	h, _ = h.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	h, _ = h.Update(loadRows(st)())
+	if view := ansi.Strip(h.View()); !strings.Contains(view, "Weekly sync") {
+		t.Fatalf("no title at 60 columns:\n%s", view)
+	}
+}
+
+func TestAppIgnoresStaleBackHome(t *testing.T) {
+	st := store.New(t.TempDir())
+	m, err := st.Create("Weekly", time.Now(), "pt", "m", "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Unlock()
+	a := newApp(context.Background(), Deps{Store: st, Theme: theme})
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	model, _ = model.Update(openMeetingMsg{m.Meta.ID})
+	if model.(app).screen != viewerScreen {
+		t.Fatal("openMeetingMsg did not open the viewer")
+	}
+	model, _ = model.Update(backHomeMsg{from: recordScreen})
+	if got := model.(app).screen; got != viewerScreen {
+		t.Fatalf("screen %v after a stale backHomeMsg, want the viewer (%v)", got, viewerScreen)
 	}
 }

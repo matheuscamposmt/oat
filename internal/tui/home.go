@@ -35,6 +35,7 @@ type homeModel struct {
 	title         textinput.Model
 	naming        bool
 	confirmDelete bool
+	starting      bool // the app sets it while a recording starts
 	drain         map[string]int
 	err           string
 	width         int
@@ -189,7 +190,7 @@ func (h homeModel) key(k tea.KeyPressMsg) (homeModel, tea.Cmd) {
 			h.confirmDelete = true
 		}
 	case "q", "ctrl+c":
-		return h, tea.Quit
+		return h, msgCmd(quitRequestMsg{})
 	}
 	return h, nil
 }
@@ -233,6 +234,8 @@ func (h homeModel) View() string {
 		bottom = "  " + accent.Render(fmt.Sprintf("Delete %q? y/n", r.Meta.Title))
 	case h.err != "":
 		bottom = "  " + t.style(t.Err).Render("! "+h.err)
+	case h.starting:
+		bottom = "  " + dim.Render("Starting the recording…")
 	}
 	keys := "n new · enter open · / filter · d delete · q quit"
 	if h.naming {
@@ -272,7 +275,12 @@ func (h homeModel) row(r homeRow, selected bool) string {
 	if r.Summary {
 		badges = append(badges, "summary")
 	}
+	badgeText := strings.Join(badges, " · ")
+	if h.width >= 90 {
+		// Wide screens align the badge column. Narrow screens keep the room for the title.
+		badgeText = fmt.Sprintf("%-22s", badgeText)
+	}
 	left := cursor + dim.Render(r.Meta.StartedAt.Format("2006-01-02  15:04")) + "  " + title
-	right := dim.Render(store.Clock(r.Meta.Duration(time.Now()).Seconds())) + "  " + mark + "  " + dim.Render(fmt.Sprintf("%-22s", strings.Join(badges, " · ")))
+	right := dim.Render(store.Clock(r.Meta.Duration(time.Now()).Seconds())) + "  " + mark + "  " + dim.Render(badgeText)
 	return Spread(left, right, h.width-2)
 }

@@ -101,7 +101,7 @@ func (m recordModel) Update(msg tea.Msg) (recordModel, tea.Cmd) {
 	case recEventMsg:
 		save := m.handleEvent(msg.ev)
 		if m.stopped {
-			return m, tea.Batch(save, tea.Tick(4*time.Second, func(time.Time) tea.Msg { return backHomeMsg{} }))
+			return m, tea.Batch(save, tea.Tick(4*time.Second, func(time.Time) tea.Msg { return backHomeMsg{from: recordScreen} }))
 		}
 		return m, tea.Batch(save, waitEvent(m.rec.Events()))
 	case tickMsg:
@@ -174,7 +174,7 @@ func (m recordModel) handleKey(k tea.KeyPressMsg) (recordModel, tea.Cmd) {
 	key := k.String()
 	switch {
 	case m.stopped:
-		return m, msgCmd(backHomeMsg{})
+		return m, msgCmd(backHomeMsg{from: recordScreen})
 	case m.stopping:
 		if key == "q" || key == "ctrl+c" {
 			return m, msgCmd(quitDuringDrain{})

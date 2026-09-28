@@ -86,7 +86,7 @@ func (v viewerModel) key(k tea.KeyPressMsg) (viewerModel, tea.Cmd) {
 	}
 	switch key {
 	case "esc", "q":
-		return v, msgCmd(backHomeMsg{})
+		return v, msgCmd(backHomeMsg{from: viewerScreen})
 	case "tab":
 		v.focusRight = !v.focusRight
 		return v, nil

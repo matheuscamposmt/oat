@@ -175,8 +175,8 @@ func TestRecordStoppedShowsHint(t *testing.T) {
 		t.Fatal("no hint after the stop")
 	}
 	_, cmd := m.Update(key("x"))
-	if _, ok := cmd().(backHomeMsg); !ok {
-		t.Fatal("a key after the stop did not go back home")
+	if msg, ok := cmd().(backHomeMsg); !ok || msg.from != recordScreen {
+		t.Fatal("a key after the stop did not go back home from the recording screen")
 	}
 }
 
