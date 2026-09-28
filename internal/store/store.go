@@ -269,6 +269,8 @@ func (m *Meeting) Update(fn func(*Meta)) error {
 func (m *Meeting) SaveMeta() error { return m.Update(func(*Meta) {}) }
 
 // AppendSegments adds segments to transcript.jsonl with one write call.
+// It syncs the file to disk before it returns, so the caller can then
+// delete the chunk file.
 func (m *Meeting) AppendSegments(segs []Segment) error {
 	if len(segs) == 0 {
 		return nil
@@ -289,6 +291,10 @@ func (m *Meeting) AppendSegments(segs []Segment) error {
 		return err
 	}
 	if _, err := f.Write(buf.Bytes()); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
 		f.Close()
 		return err
 	}
