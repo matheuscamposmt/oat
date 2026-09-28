@@ -14,6 +14,7 @@ import (
 
 	"github.com/matheuscamposmt/oat/internal/session"
 	"github.com/matheuscamposmt/oat/internal/store"
+	"github.com/matheuscamposmt/oat/internal/transcribe"
 )
 
 // Deps holds what the HUD needs from the rest of oat.
@@ -157,8 +158,11 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, loadRows(a.deps.Store)
 	case drainEventMsg:
 		var cmd tea.Cmd
-		if ev, ok := msg.ev.(session.DrainEvent); ok {
+		switch ev := msg.ev.(type) {
+		case session.DrainEvent:
 			a.home, cmd = a.home.Update(drainMsg(ev))
+		case transcribe.Warning:
+			a.home.err = ev.Msg
 		}
 		return a, tea.Batch(cmd, waitDrain(a.drainCh))
 	case quitDuringDrain, signalMsg:

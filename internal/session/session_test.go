@@ -607,6 +607,31 @@ func TestDrainKeepsProcessingWhenWriteFails(t *testing.T) {
 	}
 }
 
+func TestDrainForwardsFatalWarning(t *testing.T) {
+	st := store.New(t.TempDir())
+	m, err := st.Create("Crash", fixedNow, "pt", "m", "off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(m.ChunksDir(), store.ChunkName(store.Them, 30)), chunk.EncodeWAV(make([]int16, 16000)), 0o644)
+	m.Unlock()
+	fc := &fakeClient{fn: func(context.Context) (groq.Result, error) {
+		return groq.Result{}, &groq.AuthError{Msg: "Invalid API Key"}
+	}}
+	var mu sync.Mutex
+	var warnings []transcribe.Warning
+	Drain(context.Background(), st, fc, config.Default(), func(ev any) {
+		if w, ok := ev.(transcribe.Warning); ok {
+			mu.Lock()
+			warnings = append(warnings, w)
+			mu.Unlock()
+		}
+	})
+	if len(warnings) != 1 || !warnings[0].Fatal || !strings.Contains(warnings[0].Msg, "Groq rejected the API key") {
+		t.Fatalf("warnings %+v, want one fatal auth warning", warnings)
+	}
+}
+
 func TestSetLangSavesMeta(t *testing.T) {
 	o, _, op, _ := setup(t, "off", "[Out] Speaker")
 	s, err := Start(context.Background(), o)

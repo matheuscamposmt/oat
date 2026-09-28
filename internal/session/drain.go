@@ -17,7 +17,8 @@ type DrainEvent struct {
 }
 
 // Drain sends the chunks that earlier runs left behind, one meeting at a time.
-// It skips meetings that a live process uses.
+// It skips meetings that a live process uses. emit receives DrainEvent values
+// and the fatal transcribe.Warning values.
 func Drain(ctx context.Context, st *store.Store, client transcribe.Client, cfg config.Config, emit func(any)) {
 	meetings, err := st.List()
 	if err != nil {
@@ -43,8 +44,13 @@ func drainOne(ctx context.Context, m *store.Meeting, client transcribe.Client, c
 	meta := m.Snapshot()
 	_ = m.Update(func(mm *store.Meta) { mm.Status = store.Processing })
 	pipe := transcribe.New(m, client, transcribe.Config{Model: meta.Model, KeepAudio: cfg.KeepAudio}, func(ev any) {
-		if q, ok := ev.(transcribe.QueueEvent); ok {
-			emit(DrainEvent{ID: meta.ID, Pending: q.Pending})
+		switch e := ev.(type) {
+		case transcribe.QueueEvent:
+			emit(DrainEvent{ID: meta.ID, Pending: e.Pending})
+		case transcribe.Warning:
+			if e.Fatal { // for example, Groq rejected the key
+				emit(e)
+			}
 		}
 	})
 	pipe.Start(ctx)

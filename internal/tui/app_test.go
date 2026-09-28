@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/matheuscamposmt/oat/internal/store"
+	"github.com/matheuscamposmt/oat/internal/transcribe"
 )
 
 func homeWith(t *testing.T) (homeModel, *store.Store) {
@@ -248,5 +249,14 @@ func TestAppIgnoresStaleBackHome(t *testing.T) {
 	model, _ = model.Update(backHomeMsg{from: recordScreen})
 	if got := model.(app).screen; got != viewerScreen {
 		t.Fatalf("screen %v after a stale backHomeMsg, want the viewer (%v)", got, viewerScreen)
+	}
+}
+
+func TestAppShowsFatalDrainWarning(t *testing.T) {
+	a := newApp(context.Background(), Deps{Store: store.New(t.TempDir()), Theme: theme})
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	model, _ = model.Update(drainEventMsg{transcribe.Warning{Fatal: true, Msg: "Groq rejected the API key"}})
+	if view := ansi.Strip(model.(app).View().Content); !strings.Contains(view, "Groq rejected the API key") {
+		t.Fatalf("no drain warning on the home screen:\n%s", view)
 	}
 }
