@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -185,5 +186,76 @@ func TestRecordFatalWarningStays(t *testing.T) {
 	m, _ = m.Update(recEventMsg{transcribe.Warning{Msg: "Groq rate limit"}})
 	if !strings.Contains(ansi.Strip(m.View()), "Groq rejected the API key") {
 		t.Fatal("a normal warning replaced a fatal one")
+	}
+}
+
+// savesNotes runs cmd and the commands of each tea.BatchMsg in goroutines, so
+// a slow tick does not block. It reports whether one of them gives a
+// notesSavedMsg without an error within one second.
+func savesNotes(t *testing.T, cmd tea.Cmd) bool {
+	t.Helper()
+	out := make(chan tea.Msg, 16)
+	run := func(c tea.Cmd) {
+		if c != nil {
+			go func() { out <- c() }()
+		}
+	}
+	run(cmd)
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case msg := <-out:
+			switch msg := msg.(type) {
+			case tea.BatchMsg:
+				for _, c := range msg {
+					run(c)
+				}
+			case notesSavedMsg:
+				if msg.err != nil {
+					t.Fatalf("notes save: %v", msg.err)
+				}
+				return true
+			}
+		case <-deadline:
+			return false
+		}
+	}
+}
+
+func TestRecordSelfStopSavesNotes(t *testing.T) {
+	m, f := recording(t, 120)
+	m, _ = m.Update(key("a"))
+	m, cmd := m.Update(recEventMsg{session.StoppedEvent{}})
+	if !savesNotes(t, cmd) {
+		t.Fatal("a stop by the session did not save the notes")
+	}
+	if notes, _ := f.m.Notes(); notes != "a" {
+		t.Fatalf("notes.md = %q, want %q", notes, "a")
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "STOPPED") || strings.Contains(view, "● REC") {
+		t.Fatalf("header after a stop by the session:\n%s", view)
+	}
+}
+
+func TestRecordStoppedWithErrorShowsIt(t *testing.T) {
+	m, _ := recording(t, 120)
+	m, _ = m.Update(key("ctrl+s"))
+	m, _ = m.Update(recEventMsg{session.StoppedEvent{Err: errors.New("groq rejected the API key")}})
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "groq rejected the API key") || strings.Contains(view, "✓ Saved") {
+		t.Fatalf("view after a failed stop:\n%s", view)
+	}
+}
+
+func TestRecordStoppedShowsFolderPath(t *testing.T) {
+	m, f := recording(t, 120)
+	// Make the screen wide enough for the full temp path.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: max(120, len(f.m.Dir)+10), Height: 30})
+	m, _ = m.Update(key("ctrl+s"))
+	m, _ = m.Update(recEventMsg{transcribe.Warning{Msg: "Groq rate limit"}})
+	m, _ = m.Update(recEventMsg{session.StoppedEvent{}})
+	if view := ansi.Strip(m.View()); !strings.Contains(view, f.m.Dir) {
+		t.Fatalf("no folder path %q in:\n%s", f.m.Dir, view)
 	}
 }

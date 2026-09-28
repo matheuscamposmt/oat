@@ -99,11 +99,11 @@ func (m recordModel) Update(msg tea.Msg) (recordModel, tea.Cmd) {
 		m.layout()
 		return m, nil
 	case recEventMsg:
-		m.handleEvent(msg.ev)
+		save := m.handleEvent(msg.ev)
 		if m.stopped {
-			return m, tea.Tick(4*time.Second, func(time.Time) tea.Msg { return backHomeMsg{} })
+			return m, tea.Batch(save, tea.Tick(4*time.Second, func(time.Time) tea.Msg { return backHomeMsg{} }))
 		}
-		return m, waitEvent(m.rec.Events())
+		return m, tea.Batch(save, waitEvent(m.rec.Events()))
 	case tickMsg:
 		m.now = time.Time(msg)
 		var cmd tea.Cmd
@@ -131,7 +131,9 @@ func (m recordModel) Update(msg tea.Msg) (recordModel, tea.Cmd) {
 	return m, cmd
 }
 
-func (m *recordModel) handleEvent(ev any) {
+// handleEvent applies a session event. It returns a command that saves the
+// notes when the session stopped by itself with unsaved notes, else nil.
+func (m *recordModel) handleEvent(ev any) tea.Cmd {
 	switch e := ev.(type) {
 	case session.LevelEvent:
 		h := append(m.levels[e.Speaker], e.DB)
@@ -155,7 +157,17 @@ func (m *recordModel) handleEvent(ev any) {
 		m.echoOn = e.On
 	case session.StoppedEvent:
 		m.stopped, m.stopErr = true, e.Err
+		if !m.stopping {
+			// The session stopped by itself, for example after a disk write
+			// failure. stop() did not run, so save the notes here.
+			m.stopping = true
+			m.notes.Blur()
+			if m.notesDirty {
+				return m.saveNotes()
+			}
+		}
 	}
+	return nil
 }
 
 func (m recordModel) handleKey(k tea.KeyPressMsg) (recordModel, tea.Cmd) {
@@ -309,6 +321,9 @@ func (m recordModel) View() string {
 
 	var status string
 	switch {
+	case m.stopped && m.stopErr != nil:
+		status = t.style(t.Err).Render("! Transcription stopped: " + m.stopErr.Error() +
+			". The chunks stay on disk, and the next start of oat sends them.")
 	case m.stopped:
 		status = accent.Render("✓ Saved") + dim.Render(" · In Claude Code: /mcp__oat__enhance")
 	case m.stopping:
@@ -317,14 +332,17 @@ func (m recordModel) View() string {
 		status = m.spin.View() + dim.Render(fmt.Sprintf(" %d chunks transcribing", m.pending))
 	}
 
+	// After the stop, the folder path replaces a normal warning. A fatal
+	// warning stays.
 	warn := ""
-	if m.warn != "" {
+	switch {
+	case m.warn != "" && (m.warnFatal || !m.stopped):
 		c := t.Warn
 		if m.warnFatal {
 			c = t.Err
 		}
 		warn = t.style(c).Render("! " + m.warn)
-	} else if m.stopped {
+	case m.stopped:
 		warn = dim.Render(m.rec.Meeting().Dir)
 	}
 
