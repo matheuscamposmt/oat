@@ -51,7 +51,10 @@ func drainOne(ctx context.Context, m *store.Meeting, client transcribe.Client, c
 	_, _ = pipe.EnqueuePending()
 	pipe.Close()
 	err := pipe.Wait()
-	if err == nil && ctx.Err() == nil && pipe.Pending() == 0 {
+	// A failed transcript write leaves the chunk on disk, so the meeting stays
+	// processing, and the next drain sends the chunk again.
+	left, lerr := m.PendingChunks()
+	if err == nil && ctx.Err() == nil && pipe.Pending() == 0 && lerr == nil && len(left) == 0 {
 		end := meta.EndedAt
 		if end.IsZero() {
 			end = lastEnd(m, meta.StartedAt)

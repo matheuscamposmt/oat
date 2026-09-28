@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"os"
@@ -518,6 +519,91 @@ func TestDrainSendsLeftovers(t *testing.T) {
 	}
 	if len(events) == 0 || !events[len(events)-1].Done {
 		t.Fatalf("events %+v", events)
+	}
+}
+
+// statusOnDisk reads the status in meta.json without Load, which marks an
+// unlocked meeting as interrupted.
+func statusOnDisk(t *testing.T, dir string) store.Status {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta store.Meta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatal(err)
+	}
+	return meta.Status
+}
+
+func TestLeftoverChunksKeepProcessing(t *testing.T) {
+	o, _, op, _ := setup(t, "off", "[Out] Speaker")
+	op.frames["alsa_input.mic"] = utterance()
+	s, err := Start(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A folder with the name transcript.jsonl makes AppendSegments fail.
+	if err := os.Mkdir(filepath.Join(s.Meeting().Dir, "transcript.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	close(op.gate)
+	op.waitDrained(t, 2)
+	s.Stop()
+	var stopped StoppedEvent
+	waitFor(t, s, "StoppedEvent", func(ev any) bool {
+		e, ok := ev.(StoppedEvent)
+		if ok {
+			stopped = e
+		}
+		return ok
+	})
+	if stopped.Err == nil {
+		t.Fatal("StoppedEvent.Err is nil, but a chunk was not transcribed")
+	}
+	if got := s.Meeting().Snapshot().Status; got != store.Processing {
+		t.Fatalf("status %s, want processing", got)
+	}
+	if got := statusOnDisk(t, s.Meeting().Dir); got != store.Processing {
+		t.Fatalf("status in meta.json %s, want processing", got)
+	}
+	if left, err := s.Meeting().PendingChunks(); err != nil || len(left) != 1 {
+		t.Fatalf("chunks left %v (%v), want 1", left, err)
+	}
+}
+
+func TestDrainKeepsProcessingWhenWriteFails(t *testing.T) {
+	st := store.New(t.TempDir())
+	m, err := st.Create("Crash", fixedNow, "pt", "m", "off")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(m.ChunksDir(), store.ChunkName(store.Them, 30))
+	os.WriteFile(path, chunk.EncodeWAV(make([]int16, 16000)), 0o644)
+	os.WriteFile(filepath.Join(m.Dir, ".lock"), []byte(strconv.Itoa(999999999)), 0o644)
+	blocker := filepath.Join(m.Dir, "transcript.jsonl")
+	if err := os.Mkdir(blocker, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	Drain(context.Background(), st, &fakeClient{}, config.Default(), func(any) {})
+	if got := statusOnDisk(t, m.Dir); got != store.Processing {
+		t.Fatalf("status %s after a failed write, want processing", got)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the chunk is not on disk: %v", err)
+	}
+
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	Drain(context.Background(), st, &fakeClient{}, config.Default(), func(any) {})
+	if got := statusOnDisk(t, m.Dir); got != store.Done {
+		t.Fatalf("status %s after the second drain, want done", got)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the chunk is still on disk: %v", err)
 	}
 }
 

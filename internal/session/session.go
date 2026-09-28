@@ -221,9 +221,20 @@ func (s *Session) Abandon() {
 	_ = s.m.Unlock()
 }
 
+// finish marks the meeting done when no chunk waits in memory or on disk.
+// When chunks stay on disk, the meeting stays processing, and the next start
+// of oat sends them.
 func (s *Session) finish(err error) {
-	if err == nil && s.ctx.Err() == nil && s.pipe.Pending() == 0 {
-		_ = s.m.Update(func(m *store.Meta) { m.Status = store.Done })
+	if err == nil && s.ctx.Err() == nil {
+		left, perr := s.m.PendingChunks()
+		switch {
+		case perr != nil:
+			err = fmt.Errorf("list the chunks that wait: %w", perr)
+		case len(left) > 0:
+			err = fmt.Errorf("%d chunks were not transcribed", len(left))
+		case s.pipe.Pending() == 0:
+			_ = s.m.Update(func(m *store.Meta) { m.Status = store.Done })
+		}
 	}
 	_ = s.m.WriteTranscriptMD()
 	_ = s.m.Unlock()
