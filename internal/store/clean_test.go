@@ -51,6 +51,24 @@ func TestCleanKeepsRealSpeech(t *testing.T) {
 	}
 }
 
+func TestCleanKeepsMeNearTwoPartialThemSegments(t *testing.T) {
+	me := Segment{11, 15, Me, "sim claro sobre o prazo"}
+	got := Clean([]Segment{
+		{10, 12, Them, "sim claro"},
+		{13, 15, Them, "sobre o prazo"},
+		me,
+	})
+	if len(got) != 3 {
+		t.Fatalf("got %+v", got)
+	}
+	for _, s := range got {
+		if s == me {
+			return
+		}
+	}
+	t.Fatalf("dropped the Me segment: %+v", got)
+}
+
 func TestTranscriptLines(t *testing.T) {
 	segs := []Segment{{725, 727, Me, "Acho que dá"}}
 	if got := TranscriptLines(segs, false)[0]; got != "[00:12:05] Me: Acho que dá" {

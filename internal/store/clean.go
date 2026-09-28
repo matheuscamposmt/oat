@@ -39,27 +39,33 @@ func Clean(segs []Segment) []Segment {
 	return out
 }
 
-// isEcho reports whether a "Me" segment repeats the words of "Them" segments
-// near it in time. On speakers, the mic records the remote voices too.
+// isEcho reports whether a "Me" segment repeats the words of one "Them"
+// segment near it in time. On speakers, the mic records the remote voices too.
+// The ratio is computed against each "Them" segment in the window by itself:
+// the "Me" segment is echo when one single "Them" segment has 70% or more of
+// its words.
 func isEcho(me Segment, all []Segment) bool {
 	words := Words(me.Text)
 	if len(words) < echoMinWords {
 		return false
 	}
-	them := map[string]bool{}
 	for _, s := range all {
 		if s.Speaker != Them || s.Start > me.End+echoWindow || s.End < me.Start-echoWindow {
 			continue
 		}
+		them := map[string]bool{}
 		for _, w := range Words(s.Text) {
 			them[w] = true
 		}
-	}
-	hit := 0
-	for _, w := range words {
-		if them[w] {
-			hit++
+		hit := 0
+		for _, w := range words {
+			if them[w] {
+				hit++
+			}
+		}
+		if float64(hit)/float64(len(words)) >= echoRatio {
+			return true
 		}
 	}
-	return float64(hit)/float64(len(words)) >= echoRatio
+	return false
 }
