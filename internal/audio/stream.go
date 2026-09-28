@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
 	"sync/atomic"
+	"syscall"
 )
 
 // ParecPath is the parec binary. Tests replace it with a script.
@@ -46,12 +48,24 @@ func Open(ctx context.Context, device string) (*Stream, error) {
 	go func() {
 		ReadFrames(stdout, s.frames)
 		close(s.frames)
-		if err := cmd.Wait(); err != nil && ctx.Err() == nil && !s.closed.Load() {
+		if err := cmd.Wait(); err != nil && ctx.Err() == nil && !(s.closed.Load() && killedBySIGKILL(err)) {
 			s.err = fmt.Errorf("parec on %s stopped: %v %s", device, err, strings.TrimSpace(stderr.String()))
 		}
 		close(s.done)
 	}()
 	return s, nil
+}
+
+// killedBySIGKILL reports whether err from cmd.Wait says that SIGKILL ended
+// the process. Close stops parec with SIGKILL, so after Close only that exit
+// is not a parec failure.
+func killedBySIGKILL(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	ws, ok := exitErr.Sys().(syscall.WaitStatus)
+	return ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL
 }
 
 // Frames returns the channel of 20 ms frames.

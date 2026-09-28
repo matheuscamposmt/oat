@@ -292,6 +292,20 @@ func TestStreamReportsParecFailure(t *testing.T) {
 	}
 }
 
+func TestStreamErrAfterCloseKeepsParecFailure(t *testing.T) {
+	fakeParec(t, "echo 'Stream error: No such entity' >&2; exit 1")
+	s, err := Open(context.Background(), "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range s.Frames() {
+	}
+	s.Close()
+	if s.Err() == nil || !strings.Contains(s.Err().Error(), "No such entity") {
+		t.Fatalf("Err = %v", s.Err())
+	}
+}
+
 func TestStreamClose(t *testing.T) {
 	fakeParec(t, "exec cat /dev/zero")
 	s, err := Open(context.Background(), "mic")
