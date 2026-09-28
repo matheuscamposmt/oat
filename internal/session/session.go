@@ -301,6 +301,8 @@ const (
 func (s *Session) capture(sp store.Speaker) {
 	defer s.capWG.Done()
 	ch := chunk.New()
+	// Flush on every exit. The closure makes Flush run at exit, not now.
+	defer func() { s.saveChunk(sp, ch.Flush()) }()
 	var failures []time.Time
 	for {
 		src, err := s.opts.Open(s.ctx, s.device(sp))
@@ -314,11 +316,9 @@ func (s *Session) capture(sp store.Speaker) {
 		src.Close()
 		switch reason {
 		case stopped:
-			s.saveChunk(sp, ch.Flush())
 			return
 		case ended:
 			if !s.retryCapture(sp, &failures, src.Err()) {
-				s.saveChunk(sp, ch.Flush())
 				return
 			}
 		}

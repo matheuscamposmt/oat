@@ -2,9 +2,11 @@ package session
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,7 +70,8 @@ type fakeSource struct {
 }
 
 // newSource sends frames after the gate opens, then waits for Close.
-func newSource(frames [][]int16, gate chan struct{}) *fakeSource {
+// With end, it closes its channel after the frames, as when parec exits.
+func newSource(frames [][]int16, gate chan struct{}, end bool) *fakeSource {
 	s := &fakeSource{ch: make(chan []int16), gate: gate, quit: make(chan struct{}), drained: make(chan struct{})}
 	go func() {
 		defer close(s.ch)
@@ -85,6 +88,9 @@ func newSource(frames [][]int16, gate chan struct{}) *fakeSource {
 			}
 		}
 		close(s.drained)
+		if end {
+			return
+		}
 		<-s.quit
 	}()
 	return s
@@ -104,19 +110,25 @@ type opener struct {
 	mu      sync.Mutex
 	gate    chan struct{}
 	frames  map[string][][]int16
+	ends    map[string]bool // the source ends after its frames
+	fails   map[string]bool // Open fails for the device after its first open
 	opened  []string
 	sources []*fakeSource
 }
 
 func newOpener() *opener {
-	return &opener{gate: make(chan struct{}), frames: map[string][][]int16{}}
+	return &opener{gate: make(chan struct{}), frames: map[string][][]int16{}, ends: map[string]bool{}, fails: map[string]bool{}}
 }
 
 func (o *opener) open(ctx context.Context, dev string) (Source, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	again := slices.Contains(o.opened, dev)
 	o.opened = append(o.opened, dev)
-	s := newSource(o.frames[dev], o.gate)
+	if again && o.fails[dev] {
+		return nil, errors.New("parec did not start")
+	}
+	s := newSource(o.frames[dev], o.gate, o.ends[dev])
 	delete(o.frames, dev) // a reopened device gives silence
 	o.sources = append(o.sources, s)
 	return s, nil
@@ -448,6 +460,33 @@ func TestAbandonKeepsChunks(t *testing.T) {
 	}
 	if m.Meta.Status != store.Interrupted {
 		t.Fatalf("status %s, want interrupted", m.Meta.Status)
+	}
+}
+
+func TestReopenFailureKeepsAudio(t *testing.T) {
+	o, _, op, fc := setup(t, "off", "[Out] Speaker")
+	// The mic stream ends after speech with no trailing silence, and it does not open again.
+	op.frames["alsa_input.mic"] = utterance()[:145]
+	op.ends["alsa_input.mic"] = true
+	op.fails["alsa_input.mic"] = true
+	s, err := Start(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(op.gate)
+	op.waitOpened(t, 3) // the mic, the monitor, and the failed mic reopen
+	s.Stop()
+	waitFor(t, s, "StoppedEvent", isStopped)
+	if fc.count() != 1 {
+		t.Fatalf("Groq got %d calls, want 1: the speech in the chunker was lost", fc.count())
+	}
+	m, err := o.Store.Load(s.Meeting().Snapshot().ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segs, _ := m.Segments()
+	if len(segs) != 1 || segs[0].Speaker != store.Me {
+		t.Fatalf("segments %+v", segs)
 	}
 }
 
