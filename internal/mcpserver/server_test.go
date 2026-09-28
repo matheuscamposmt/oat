@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -153,6 +155,42 @@ func TestGetMeetingPages(t *testing.T) {
 	out, _ = call(t, cs, "get_meeting", map[string]any{"id": m.Meta.ID, "offset": 4, "limit": 2})
 	if !strings.Contains(out, "linha e") || strings.Contains(out, "next_offset") || strings.Contains(out, "## Notes") {
 		t.Fatalf("last page:\n%s", out)
+	}
+}
+
+// alternating returns n segments that alternate between the speakers, so each is one line.
+func alternating(n int) []store.Segment {
+	var segs []store.Segment
+	for i := range n {
+		sp := store.Me
+		if i%2 == 1 {
+			sp = store.Them
+		}
+		segs = append(segs, store.Segment{Start: float64(i * 10), End: float64(i*10 + 1), Speaker: sp, Text: fmt.Sprintf("linha %d", i)})
+	}
+	return segs
+}
+
+func TestGetMeetingHugeLimit(t *testing.T) {
+	st := store.New(t.TempDir())
+	short := done(t, st, "Short", day1, alternating(3), "")
+	// The SDK decodes the arguments through float64, so math.MaxInt64 cannot
+	// come over the protocol. Call the handler directly.
+	res, _, err := (&handlers{st: st}).get(context.Background(), nil, getIn{ID: short.Meta.ID, Offset: 1, Limit: math.MaxInt64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(out, "lines 1 to 2 of 3") || !strings.Contains(out, "linha 1") || !strings.Contains(out, "linha 2") ||
+		strings.Contains(out, "linha 0") || strings.Contains(out, "next_offset") {
+		t.Fatalf("offset 1, limit MaxInt64:\n%s", out)
+	}
+
+	// Over the protocol, a limit near 2^63 with a large offset also overflows.
+	long := done(t, st, "Long", day1.Add(time.Hour), alternating(1000), "")
+	out, isErr := call(t, connect(t, st), "get_meeting", map[string]any{"id": long.Meta.ID, "offset": 900, "limit": int64(9223372036854775000)})
+	if isErr || !strings.Contains(out, "lines 900 to 999 of 1000") || strings.Contains(out, "next_offset") {
+		t.Fatalf("offset 900, limit near 2^63:\n%.300s", out)
 	}
 }
 

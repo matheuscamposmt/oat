@@ -171,7 +171,11 @@ func (h *handlers) get(ctx context.Context, _ *mcp.CallToolRequest, in getIn) (*
 	case in.Offset >= total:
 		fmt.Fprintf(&b, "\n## Transcript\n(no lines at offset %d. The transcript has %d lines.)\n", in.Offset, total)
 	default:
-		to := min(in.Offset+in.Limit, total)
+		// in.Offset+in.Limit can overflow with a huge limit, so compare first.
+		to := total
+		if in.Limit < total-in.Offset {
+			to = in.Offset + in.Limit
+		}
 		fmt.Fprintf(&b, "\n## Transcript (lines %d to %d of %d)\n", in.Offset, to-1, total)
 		for _, l := range lines[in.Offset:to] {
 			b.WriteString(l + "\n")
