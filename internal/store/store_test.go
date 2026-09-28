@@ -94,6 +94,35 @@ func TestLoadMarksDeadRecordingInterrupted(t *testing.T) {
 	if again.Meta.Status != Interrupted {
 		t.Fatal("the new status was not saved")
 	}
+	if !again.Meta.EndedAt.Equal(t1430) {
+		t.Fatalf("EndedAt %v without segments, want the start %v", again.Meta.EndedAt, t1430)
+	}
+}
+
+func TestLoadSetsEndOfInterruptedMeeting(t *testing.T) {
+	st := New(t.TempDir())
+	m := newMeeting(t, st, "Crash", t1430)
+	if err := m.AppendSegments([]Segment{{Start: 25, End: 30, Speaker: Them, Text: "tchau"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.Dir, ".lock"), []byte(strconv.Itoa(deadPID)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := st.Load(m.Meta.ID)
+	if err != nil || loaded.Meta.Status != Interrupted {
+		t.Fatalf("got %v %v", loaded.Meta.Status, err)
+	}
+	want := t1430.Add(30 * time.Second)
+	if !loaded.Meta.EndedAt.Equal(want) {
+		t.Fatalf("EndedAt %v, want %v", loaded.Meta.EndedAt, want)
+	}
+	now := time.Now()
+	if d, later := loaded.Meta.Duration(now), loaded.Meta.Duration(now.Add(time.Hour)); d != 30*time.Second || later != d {
+		t.Fatalf("Duration %v, an hour later %v, want 30s both times", d, later)
+	}
+	if again, _ := st.Load(m.Meta.ID); !again.Meta.EndedAt.Equal(want) {
+		t.Fatal("the end time was not saved")
+	}
 }
 
 func TestLoadRejectsBadIDs(t *testing.T) {

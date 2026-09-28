@@ -55,9 +55,11 @@ func drainOne(ctx context.Context, m *store.Meeting, client transcribe.Client, c
 	// processing, and the next drain sends the chunk again.
 	left, lerr := m.PendingChunks()
 	if err == nil && ctx.Err() == nil && pipe.Pending() == 0 && lerr == nil && len(left) == 0 {
+		// Load sets the end of an interrupted meeting from the segments that it
+		// had then. The drained segments can end later.
 		end := meta.EndedAt
-		if end.IsZero() {
-			end = lastEnd(m, meta.StartedAt)
+		if last := lastEnd(m, meta.StartedAt); last.After(end) {
+			end = last
 		}
 		_ = m.Update(func(mm *store.Meta) {
 			mm.Status = store.Done

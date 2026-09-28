@@ -167,9 +167,24 @@ func (s *Store) Load(id string) (*Meeting, error) {
 	m.Meta.ID = id
 	if (m.Meta.Status == Recording || m.Meta.Status == Processing) && !m.IsLive() {
 		m.Meta.Status = Interrupted
+		if m.Meta.EndedAt.IsZero() {
+			// Without an end, Duration uses now, and the length grows with the clock.
+			m.Meta.EndedAt = m.lastSegmentEnd()
+		}
 		_ = m.SaveMeta()
 	}
 	return m, nil
+}
+
+// lastSegmentEnd returns the start plus the largest segment end, or the start
+// when no segment can be read.
+func (m *Meeting) lastSegmentEnd() time.Time {
+	segs, _ := m.Segments()
+	var end float64
+	for _, s := range segs {
+		end = max(end, s.End)
+	}
+	return m.Meta.StartedAt.Add(time.Duration(end * float64(time.Second)))
 }
 
 // List returns all meetings, newest first. It skips folders without a readable meta.json.
