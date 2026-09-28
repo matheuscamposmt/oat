@@ -115,6 +115,27 @@ func TestErrorTypes(t *testing.T) {
 	}
 }
 
+func TestRetryAfterClamp(t *testing.T) {
+	cases := map[string]time.Duration{
+		"7":     7 * time.Second,
+		"2.5":   2500 * time.Millisecond,
+		"3600":  time.Hour,
+		"3601":  defaultRetryAfter,
+		"1e300": defaultRetryAfter,
+		"inf":   defaultRetryAfter,
+		"-Inf":  defaultRetryAfter,
+		"NaN":   defaultRetryAfter,
+		"0":     defaultRetryAfter,
+		"-5":    defaultRetryAfter,
+		"soon":  defaultRetryAfter,
+	}
+	for in, want := range cases {
+		if got := retryAfter(in); got != want {
+			t.Errorf("retryAfter(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestNetworkErrorIsTemporary(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	srv.Close()

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -17,7 +18,10 @@ import (
 // DefaultBaseURL is the OpenAI-compatible Groq API.
 const DefaultBaseURL = "https://api.groq.com/openai/v1"
 
-const defaultRetryAfter = 10 * time.Second
+const (
+	defaultRetryAfter = 10 * time.Second
+	maxRetryAfter     = time.Hour
+)
 
 // Client calls Groq with one API key.
 type Client struct {
@@ -162,9 +166,11 @@ func (c *Client) do(req *http.Request, out any) error {
 	}
 }
 
+// retryAfter reads the Retry-After header in seconds. A value that is not a
+// number in (0, 3600] gives the default. ParseFloat accepts inf and NaN.
 func retryAfter(v string) time.Duration {
 	secs, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-	if err != nil || secs <= 0 {
+	if err != nil || math.IsNaN(secs) || secs <= 0 || secs > maxRetryAfter.Seconds() {
 		return defaultRetryAfter
 	}
 	return time.Duration(secs * float64(time.Second))
