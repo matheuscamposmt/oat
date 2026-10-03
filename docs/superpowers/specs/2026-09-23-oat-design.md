@@ -14,7 +14,7 @@ Goals:
 
 1. Run from the terminal only, with a HUD in the style of Claude Code.
 2. Transcribe with the Groq cloud API. oat runs no local speech model.
-3. Read the Groq key from the `env` blocks of `~/.claude/settings.json` and `~/.claude/settings.local.json`.
+3. Read the Groq key from the environment or from the oat configuration file, not from the files of another tool.
 4. Keep the microphone ("Me") and the system audio ("Them") as streams that never mix.
 5. Give Claude read access to all meetings through MCP.
 6. Install with one command, as one static binary with no runtime.
@@ -236,10 +236,9 @@ The flags `--lang`, `--model`, `--echo`, and `--keep-audio` override the file.
 oat looks for the Groq key in this order and uses the first value that it finds:
 
 1. The environment variable `GROQ_API_KEY`.
-2. `env.GROQ_API_KEY` in `~/.claude/settings.local.json`.
-3. `env.GROQ_API_KEY` in `~/.claude/settings.json`.
+2. `groq_api_key` in `~/.config/oat/config.toml`.
 
-If `CLAUDE_CONFIG_DIR` is set, oat reads the two files from that folder in place of `~/.claude`. If no key exists, oat stops before it records and names the three places. `oat doctor` shows the source of the key and the key in masked form, for example `gsk_…a1b2`.
+If no key exists, oat stops before it records and names the two places. `oat doctor` shows the source of the key and the key in masked form, for example `gsk_…a1b2`.
 
 ## HUD
 
@@ -353,7 +352,7 @@ The unit tests make no network calls and need no audio device.
 | Package | Test |
 |---|---|
 | `chunk` | Synthetic PCM of tones and silence gives the expected cuts, drops, and pre-roll |
-| `config` | A temporary HOME tests the key lookup order, `CLAUDE_CONFIG_DIR`, and flag overrides |
+| `config` | Tests cover the key lookup order, the configuration file, and flag overrides |
 | `groq` | An `httptest` server returns 200, 429 with `retry-after`, 500, and 401 |
 | `transcribe` | A fake Groq client tests retry, the segment filters, and the time offsets |
 | `store` | `Clean` tests sort, echo filter, and joins. Tests also cover the ID slug, a partial JSONL line, and status changes |

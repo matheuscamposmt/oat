@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -78,59 +77,40 @@ func TestDefaultPaths(t *testing.T) {
 	}
 }
 
-func writeSettings(t *testing.T, dir, name, body string) {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestGroqKeyOrder(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("GROQ_API_KEY", "")
-	claude := filepath.Join(home, ".claude")
-
-	writeSettings(t, claude, "settings.json", `{"env":{"GROQ_API_KEY":"gsk_from_settings"}}`)
-	key, src, err := GroqKey()
-	if err != nil || key != "gsk_from_settings" || !strings.HasSuffix(src, "settings.json") {
-		t.Fatalf("settings.json: got %q %q %v", key, src, err)
-	}
-
-	writeSettings(t, claude, "settings.local.json", `{"env":{"GROQ_API_KEY":"gsk_from_local","OTHER":1}}`)
-	key, src, err = GroqKey()
-	if err != nil || key != "gsk_from_local" || !strings.HasSuffix(src, "settings.local.json") {
-		t.Fatalf("settings.local.json: got %q %q %v", key, src, err)
+	cfg := Config{GroqAPIKey: " gsk_from_file "}
+	key, src, err := GroqKey(cfg, "/home/u/.config/oat/config.toml")
+	if err != nil || key != "gsk_from_file" || src != "/home/u/.config/oat/config.toml" {
+		t.Fatalf("config file: got %q %q %v", key, src, err)
 	}
 
 	t.Setenv("GROQ_API_KEY", "gsk_from_env")
-	key, src, err = GroqKey()
+	key, src, err = GroqKey(cfg, "/home/u/.config/oat/config.toml")
 	if err != nil || key != "gsk_from_env" || src != "environment variable GROQ_API_KEY" {
 		t.Fatalf("environment: got %q %q %v", key, src, err)
 	}
 }
 
-func TestGroqKeyClaudeConfigDir(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+func TestGroqKeyFromConfigFile(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "")
-	dir := t.TempDir()
-	t.Setenv("CLAUDE_CONFIG_DIR", dir)
-	writeSettings(t, dir, "settings.json", `{"env":{"GROQ_API_KEY":"gsk_custom_dir"}}`)
-	key, _, err := GroqKey()
-	if err != nil || key != "gsk_custom_dir" {
-		t.Fatalf("got %q %v", key, err)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("lang = \"en\"\ngroq_api_key = \"gsk_in_toml\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, src, err := GroqKey(cfg, path)
+	if err != nil || key != "gsk_in_toml" || src != path {
+		t.Fatalf("got %q %q %v", key, src, err)
 	}
 }
 
 func TestGroqKeyMissing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("GROQ_API_KEY", "")
-	if _, _, err := GroqKey(); !errors.Is(err, ErrNoKey) {
+	if _, _, err := GroqKey(Default(), "/none/config.toml"); !errors.Is(err, ErrNoKey) {
 		t.Fatalf("got %v, want ErrNoKey", err)
 	}
 }

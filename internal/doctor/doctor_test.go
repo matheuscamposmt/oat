@@ -28,7 +28,7 @@ func deps(t *testing.T) Deps {
 	return Deps{
 		LookPath:  func(s string) (string, error) { return "/usr/bin/" + s, nil },
 		Pactl:     pactl,
-		GroqKey:   func() (string, string, error) { return "gsk_abcdefgh1234", "/home/u/.claude/settings.local.json", nil },
+		GroqKey:   func() (string, string, error) { return "gsk_abcdefgh1234", "/home/u/.config/oat/config.toml", nil },
 		Ping:      func(ctx context.Context, key string) error { return nil },
 		MCPStatus: func(ctx context.Context) error { return nil },
 		DataDir:   filepath.Join(t.TempDir(), "oat"),

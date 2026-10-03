@@ -12,10 +12,11 @@ import (
 
 // Config holds the values that change how oat records and transcribes.
 type Config struct {
-	Lang      string `toml:"lang"`
-	Model     string `toml:"model"`
-	Echo      string `toml:"echo"`
-	KeepAudio bool   `toml:"keep_audio"`
+	Lang       string `toml:"lang"`
+	Model      string `toml:"model"`
+	Echo       string `toml:"echo"`
+	KeepAudio  bool   `toml:"keep_audio"`
+	GroqAPIKey string `toml:"groq_api_key"` // used when GROQ_API_KEY is not set
 }
 
 // Overrides holds the command flags. An empty string or false keeps the file value.

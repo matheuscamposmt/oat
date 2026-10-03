@@ -61,7 +61,7 @@ func Run(ctx context.Context, d Deps) []Result {
 
 	key, source, err := d.GroqKey()
 	if err != nil {
-		add(Result{Name: "Groq key", Detail: err.Error(), Fix: `Add "GROQ_API_KEY" to the "env" block of ~/.claude/settings.local.json.`})
+		add(Result{Name: "Groq key", Detail: err.Error(), Fix: "Set GROQ_API_KEY, or add groq_api_key to ~/.config/oat/config.toml and chmod 600 the file."})
 	} else {
 		add(Result{Name: "Groq key", OK: true, Detail: config.MaskKey(key) + " from " + source})
 		if err := d.Ping(ctx, key); err != nil {

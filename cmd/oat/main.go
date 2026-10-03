@@ -102,7 +102,7 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	if err := cfg.Validate(); err != nil {
 		return fail(stderr, err)
 	}
-	key, _, err := config.GroqKey()
+	key, _, err := config.GroqKey(cfg, paths.Config)
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -193,10 +193,16 @@ func runDoctor(stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	pactl := audio.NewPactl()
+	cfg, cfgErr := config.Load(paths.Config)
 	rs := doctor.Run(ctx, doctor.Deps{
 		LookPath: exec.LookPath,
 		Pactl:    pactl,
-		GroqKey:  config.GroqKey,
+		GroqKey: func() (string, string, error) {
+			if cfgErr != nil {
+				return "", "", cfgErr
+			}
+			return config.GroqKey(cfg, paths.Config)
+		},
 		Ping: func(ctx context.Context, key string) error {
 			return groq.New(key).Ping(ctx)
 		},

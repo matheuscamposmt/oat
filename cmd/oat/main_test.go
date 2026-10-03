@@ -53,7 +53,6 @@ func TestParseInterspersed(t *testing.T) {
 func TestMissingKeyStopsBeforeRecording(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("GROQ_API_KEY", "")
 	var out, errOut bytes.Buffer
 	if code := run([]string{"new"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "no Groq API key found") {
