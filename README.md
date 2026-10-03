@@ -14,7 +14,7 @@ This is an early version. It runs on Linux only and was tested on Pop!_OS 22.04 
 
 Each stream is cut at pauses into chunks of 10 to 30 seconds and uploaded to Groq (`whisper-large-v3-turbo`). Chunks without speech are not sent. A line shows up in the transcript about 10 to 30 seconds after it was said, because Groq offers a file API and not a streaming one.
 
-While the meeting runs you type notes in the right pane. Transcript and notes are written to a folder on disk as they come in, so a crash loses at most the last few seconds.
+While the meeting runs you type notes in the right pane. Notes are saved 2 seconds after you stop typing, and each audio chunk is written to disk as soon as it is cut, so a crash loses the audio still in memory (under 30 seconds) and nothing else.
 
 `oat mcp` gives an MCP client access to the meetings. In Claude Code, `/mcp__oat__enhance` asks Claude to merge your notes with the transcript, in the style of Granola, and save the result as `summary.md`.
 
@@ -25,7 +25,7 @@ Audio chunks go to Groq and are deleted once they are transcribed (set `keep_aud
 - Linux with PipeWire (and its Pulse layer) or PulseAudio
 - `parec` and `pactl`, from the `pulseaudio-utils` package
 - Go 1.25 or later to build. Go 1.24 downloads 1.25 on its own.
-- A Groq API key. The free tier is enough for a few meetings a day.
+- A Groq API key
 
 ## Install
 
