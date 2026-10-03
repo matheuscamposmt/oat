@@ -1,54 +1,72 @@
 # oat
 
-oat records meetings on Linux from the terminal. It captures your microphone and the system audio as two separate streams. The Groq Whisper API transcribes both streams, and oat saves the transcript next to the notes that you type during the meeting. Claude Code reads the meetings through the MCP server that is part of oat.
+<p align="center">
+  <img src="docs/hud.png" alt="The oat recording screen: a live transcript on the left and your notes on the right" width="920">
+</p>
+
+oat records meetings on Linux from the terminal. It captures your microphone and the system audio as two separate streams, sends them to the Groq Whisper API, and saves the transcript next to the notes you type during the meeting. It also runs an MCP server, so Claude Code (or any other MCP client) can read your meetings and turn your rough notes into a summary.
+
+This is an early version. It runs on Linux only and was tested on Pop!_OS 22.04 with PipeWire.
+
+## How it works
+
+`oat new "Title"` starts a recording. Two `parec` processes capture the mic ("Me") and the monitor of your default output ("Them"). The two streams never mix, so the transcript knows who said what.
+
+Each stream is cut at pauses into chunks of 10 to 30 seconds and uploaded to Groq (`whisper-large-v3-turbo`). Chunks without speech are not sent. A line shows up in the transcript about 10 to 30 seconds after it was said, because Groq offers a file API and not a streaming one.
+
+While the meeting runs you type notes in the right pane. Transcript and notes are written to a folder on disk as they come in, so a crash loses at most the last few seconds.
+
+`oat mcp` gives an MCP client access to the meetings. In Claude Code, `/mcp__oat__enhance` asks Claude to merge your notes with the transcript, in the style of Granola, and save the result as `summary.md`.
+
+Audio chunks go to Groq and are deleted once they are transcribed (set `keep_audio = true` to keep them). Transcripts, notes, and summaries stay on your disk.
 
 ## Requirements
 
-You need these items:
-
-1. Linux with PipeWire and its Pulse layer, or PulseAudio.
-2. The commands `parec` and `pactl` from `pulseaudio-utils`.
-3. Go 1.25 or later to build. Go 1.24 downloads Go 1.25 by itself.
-4. A Groq API key.
+- Linux with PipeWire (and its Pulse layer) or PulseAudio
+- `parec` and `pactl`, from the `pulseaudio-utils` package
+- Go 1.25 or later to build. Go 1.24 downloads 1.25 on its own.
+- A Groq API key. The free tier is enough for a few meetings a day.
 
 ## Install
 
-1. Put your Groq key in the `env` block of `~/.claude/settings.local.json`:
+Give oat your Groq key in one of two ways. Export it in your shell:
 
-   ```json
-   {
-     "env": {
-       "GROQ_API_KEY": "gsk_..."
-     }
-   }
-   ```
+```sh
+export GROQ_API_KEY=gsk_...
+```
 
-2. Build and install the binary. This command also registers the MCP server in Claude Code:
+Or put it in `~/.config/oat/config.toml` and keep the file readable by you only:
 
-   ```
-   make install
-   ```
+```toml
+groq_api_key = "gsk_..."
+```
 
-3. Test the environment:
+```sh
+chmod 600 ~/.config/oat/config.toml
+```
 
-   ```
-   oat doctor
-   ```
+Then build and install:
 
-If a test fails, `oat doctor` prints the fix under it.
+```sh
+git clone https://github.com/matheuscamposmt/oat
+cd oat
+make install
+oat doctor
+```
+
+`make install` builds a static binary into `~/.local/bin/oat` and runs `oat setup`, which registers the MCP server in Claude Code at user scope. `oat doctor` checks the audio stack, the key, the MCP registration, and the data folder, and prints a fix under anything that fails.
+
+`go install github.com/matheuscamposmt/oat/cmd/oat@latest` also works. Run `oat setup` yourself afterwards. With that install, `oat version` prints `dev`.
 
 ## Record a meeting
 
-Start a recording at once:
-
-```
-oat new "Weekly sync"
+```sh
+oat new "Weekly sync"             # Portuguese by default
 oat new "Weekly sync" --lang en
+oat                               # the list of past meetings; press n to start one
 ```
 
-Or run `oat` to open the list of meetings, and press `n`.
-
-During the recording, the notes pane has the focus, so you can type at once.
+The notes pane has the focus when the recording starts, so you can type right away.
 
 | Key | Action |
 |---|---|
@@ -56,14 +74,14 @@ During the recording, the notes pane has the focus, so you can type at once.
 | `ctrl+p` | Pause or resume |
 | `ctrl+l` | Change the language for the next chunks: `pt`, `en`, `auto` |
 | `ctrl+s` | Stop and save |
-| `ctrl+c` | Stop and save, after a question |
-| `?` | Show the keys. This key works in the transcript pane |
+| `ctrl+c` | Stop and save, after a yes/no question |
+| `?` | Show the keys (in the transcript pane) |
 
-After the stop, oat sends the last chunks to Groq. If you quit before that ends, the next start of oat sends them.
+After you stop, oat uploads the last chunks. If you quit before that is done, the next start of oat finishes it.
 
-## Use the meetings in Claude Code
+## Ask Claude about your meetings
 
-Ask Claude about your meetings, for example "what did they say about the budget in the last meeting?". Claude uses these MCP tools:
+In Claude Code, ask something like "what did they say about the budget in the last meeting?". Claude has these tools:
 
 | Tool | Purpose |
 |---|---|
@@ -72,38 +90,33 @@ Ask Claude about your meetings, for example "what did they say about the budget 
 | `search_meetings` | Finds text in all transcripts and notes |
 | `save_summary` | Saves meeting notes as `summary.md` |
 
-To get Granola-style notes, run `/mcp__oat__enhance` in Claude Code. Claude merges your notes with the transcript and saves the result in `summary.md`.
+To get the summary, run `/mcp__oat__enhance`. Any other MCP client that can start a stdio server can use `oat mcp` the same way.
 
 ## Echo
 
-On speakers, the microphone also records the other people. oat uses two layers against this echo.
+With speakers, the microphone also hears the other people, so their words show up twice. oat handles this in two layers.
 
-The first layer is the PipeWire echo-cancel module. In the default `auto` mode, oat loads the module for all outputs except headphones. While oat records, your default output is `oat_ec_sink`, and oat restores the old output at the stop. If oat crashes, the next start of oat, or `oat doctor`, removes the module.
+The first is the PipeWire echo-cancel module. In the default `auto` mode, oat loads it for every output except headphones. While oat records, your default output is `oat_ec_sink`. oat restores the old output when you stop. If oat crashes, the next start (or `oat doctor`) removes the module.
 
-The second layer is a text filter. It drops a "Me" line that repeats a "Them" line from the same seconds.
+The second is a text filter that drops a "Me" line when it repeats a "Them" line from the same seconds.
 
 ## Configuration
 
-The file `~/.config/oat/config.toml` is optional. These are the keys and their defaults:
+`~/.config/oat/config.toml` is optional. These are the keys and their defaults:
 
 ```toml
 lang = "pt"                        # ISO 639-1 code, or "auto"
 model = "whisper-large-v3-turbo"   # or "whisper-large-v3"
 echo = "auto"                      # auto, on, off
 keep_audio = false                 # keep the WAV chunks in audio/
+groq_api_key = ""                  # used when GROQ_API_KEY is not set
 ```
 
 The flags `--lang`, `--model`, `--echo`, and `--keep-audio` override the file.
 
-oat reads the Groq key from the first place that has it:
-
-1. The environment variable `GROQ_API_KEY`.
-2. The `env` block of `~/.claude/settings.local.json`.
-3. The `env` block of `~/.claude/settings.json`.
-
 ## Files
 
-Each meeting has a folder in `~/.local/share/oat/meetings/`:
+Each meeting is a folder in `~/.local/share/oat/meetings/`:
 
 | File | Content |
 |---|---|
@@ -111,9 +124,16 @@ Each meeting has a folder in `~/.local/share/oat/meetings/`:
 | `transcript.jsonl` | One raw segment per line |
 | `transcript.md` | The readable transcript |
 | `notes.md` | Your notes |
-| `summary.md` | The notes that Claude wrote |
-| `chunks/` | Audio that waits for Groq |
+| `summary.md` | The notes Claude wrote |
+| `chunks/` | Audio waiting for Groq |
+| `failed/` | Audio that Groq refused |
+| `audio/` | Audio kept with `keep_audio = true` |
+| `.lock` | The PID of the process that is recording |
 
 ## Groq limits
 
-The Groq free tier limits the audio seconds per hour. Two streams can send up to twice the length of the meeting. oat does not send chunks with less than 1 second of speech. After a rate limit, the HUD shows the wait.
+The Groq free tier caps the audio seconds per hour. Two streams can send up to twice the length of the meeting, which is why oat skips chunks with less than a second of speech. When Groq rate-limits a request, the HUD shows how long it waits.
+
+## License
+
+MIT. See `LICENSE`.
