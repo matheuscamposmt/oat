@@ -141,6 +141,9 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openMeetingMsg:
 		v, err := newViewerModel(a.deps.Theme, a.deps.Store, msg.id)
 		v.summarize = a.deps.Summarize
+		if a.recOn && a.rec.stopped {
+			a.recOn = false // the recording is over, so n can start a new one
+		}
 		if err != nil {
 			a.home.err = err.Error()
 			return a, nil
@@ -212,6 +215,10 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch a.screen {
 	case recordScreen:
 		a.rec, cmd = a.rec.Update(msg)
+		if a.rec.sumState == sumWriting {
+			// The list must know, so s does not start a second summary.
+			a.home.writing[a.rec.rec.Meeting().Snapshot().ID] = true
+		}
 	case viewerScreen:
 		a.view, cmd = a.view.Update(msg)
 	default:

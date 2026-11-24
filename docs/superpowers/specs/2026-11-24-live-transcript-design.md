@@ -38,7 +38,25 @@ Rejected:
 - `LiveEvent{ID, Speaker, Start, Text, Done}` goes to the HUD. The HUD shows each open segment under the final lines, dim, and replaces its text on each event. `Done` removes it when the final segments arrive.
 - Configuration: `live = true` by default. It works only with `transcriber = "claude"`. With `live = false`, oat uses the replay of today.
 
+## Spike results that changed the design (2026-11-24)
+
+| Test | Result | Change |
+|---|---|---|
+| 8 to 10 streams at the same time | Most closed with code 4029, "Rate limit exceeded" | The client keeps at most 4 streams open and maps 4029 to a rate limit of 5 s. |
+| 2, 3, 4, and 6 streams at the same time | 2, 3, and 4 passed. With 6, one got 4029. | |
+| 6 streams opened 2 s apart | The sixth got 4029 | The limit is on open streams, not on the rate of opens. |
+| Burst of 1.5 s of buffered audio, then real time | The same text as real time | No spare stream. A chunk opens its stream after 0.5 s of speech and sends the held frames at once. |
+| A 60 s stream against two streams of 30 s, cut in the middle of a sentence | 0.99 word similarity, no word lost or repeated | A hard cut can be at any frame. |
+| A 2 min session, live against replay | 0.92 (Me) and 0.95 (Them) word similarity, 510 partial texts, no warning | |
+
 ## Limits
 
-- A chunk ends at a hard cut after 30 s of speech without a pause. The frames after the cut point were already in the old stream, and the new stream starts after them, so no word is sent twice. The WAV of the next chunk still holds those frames, so a replay after a failure can repeat up to 2 s.
-- The audio goes to the network twice only when a live segment fails.
+- With live on, the hard cut after 30 s of speech is at the last frame, not at the quietest frame of the last 2 s. The stream and the chunk file then hold the same audio, so a replay after a failure neither loses nor repeats words.
+- The audio goes to the network twice only when a live stream fails.
+- If the voice mode of Claude Code runs at the same time, the two share the limit of the server.
+
+## Summary
+
+- After the stop, oat runs `claude -p --safe-mode` with no tools, no MCP servers, and no session file. Safe mode keeps the CLAUDE.md files, hooks, and output styles of the user out of the notes. An older Claude Code without `--safe-mode` runs again without it.
+- The summary runs as `oat summary --notify <id>` in its own session, so it ends even when the user quits oat.
+- It refuses a meeting that a recording or a drain holds. It reads meta.json again before it changes the title.

@@ -202,6 +202,7 @@ func (s *Session) StopCapture() {
 		s.capWG.Wait()
 		s.bgWG.Wait()
 		s.liveWG.Wait() // a failed live segment queues its chunk, so wait before Close
+		s.liveCancel()
 		if s.opts.Echo != nil {
 			ctx, cancel := cleanupContext()
 			if err := s.opts.Echo.Disable(ctx, true); err != nil {

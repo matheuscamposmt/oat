@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/matheuscamposmt/oat/internal/session"
 	"github.com/matheuscamposmt/oat/internal/store"
 	"github.com/matheuscamposmt/oat/internal/transcribe"
 )
@@ -299,5 +301,37 @@ func TestHomeSummarizesTheSelectedMeeting(t *testing.T) {
 	}
 	if msg, ok := cmd().(summaryDoneMsg); !ok || msg.id == "" || got != msg.id {
 		t.Fatalf("got %v, summarized %q", msg, got)
+	}
+}
+
+func TestNewRecordingAfterOpeningTheSummary(t *testing.T) {
+	f := newFakeRecorder(t)
+	st := store.New(filepath.Dir(f.m.Dir))
+	starts := 0
+	a := newApp(context.Background(), Deps{Store: st, Theme: theme, Start: func(ctx context.Context, title string) (Recorder, error) {
+		starts++
+		return f, nil
+	}, Summarize: func(string) error { return nil }})
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	model, cmd := model.Update(startRecordingMsg{"x"})
+	model, _ = model.Update(cmd())
+	model, _ = model.Update(key("ctrl+s"))
+	model, _ = model.Update(recEventMsg{session.StoppedEvent{}})
+	model, _ = model.Update(summaryDoneMsg{id: f.m.Snapshot().ID})
+	f.m.Unlock()
+	model, cmd = model.Update(key("enter"))
+	model, _ = model.Update(cmd())
+	if model.(app).screen != viewerScreen {
+		t.Fatal("enter did not open the meeting")
+	}
+	model, cmd = model.Update(key("esc"))
+	model, _ = model.Update(cmd())
+	model, cmd = model.Update(startRecordingMsg{"y"})
+	if cmd == nil {
+		t.Fatal("the list refused a new recording after the summary")
+	}
+	model.Update(cmd())
+	if starts != 2 {
+		t.Fatalf("%d starts, want 2", starts)
 	}
 }

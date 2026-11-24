@@ -191,6 +191,11 @@ func (c *Chunker) cut() *Chunk {
 		return c.emit(last + 1 + normalSilence/2)
 	case silence >= earlySilence:
 		return c.emit(last + 1 + earlyTail)
+	case n >= hardMaxFrames && c.Obs != nil:
+		// The live stream already heard every frame of the chunk. A cut at the
+		// last frame keeps the stream and the chunk file the same audio, so a
+		// replay after a failure neither loses nor repeats words.
+		return c.emit(n)
 	case n >= hardMaxFrames:
 		q := n - hardSearchFrames
 		for i := q + 1; i < n; i++ {

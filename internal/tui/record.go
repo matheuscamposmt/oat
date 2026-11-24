@@ -119,7 +119,8 @@ func (m recordModel) Update(msg tea.Msg) (recordModel, tea.Cmd) {
 		if m.stopped {
 			if m.stopErr == nil && m.summarize != nil && m.hasContent() {
 				m.sumState = sumWriting
-				return m, tea.Batch(save, summarizeCmd(m.summarize, m.rec.Meeting().Snapshot().ID), m.spin.Tick)
+				// The notes reach the disk before the summary reads them.
+				return m, tea.Batch(tea.Sequence(save, summarizeCmd(m.summarize, m.rec.Meeting().Snapshot().ID)), m.spin.Tick)
 			}
 			return m, tea.Batch(save, tea.Tick(4*time.Second, func(time.Time) tea.Msg { return backHomeMsg{from: recordScreen} }))
 		}

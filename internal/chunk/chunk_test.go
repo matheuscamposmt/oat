@@ -248,11 +248,16 @@ func TestObserverHardCutContinues(t *testing.T) {
 	var idx int64
 	chunks := feed(c, &idx, speech(2000)) // 40 s without a long pause
 	chunks = append(chunks, c.Flush())
-	if len(o.starts) != 1 {
-		t.Fatalf("starts %v: the chunk after a hard cut must continue without a new start", o.starts)
+	// With an observer, the hard cut is at the last frame, so nothing carries
+	// over: the next chunk starts on its own, and each frame is in one chunk.
+	if len(o.starts) != 2 {
+		t.Fatalf("starts %v, want 2", o.starts)
 	}
-	if len(o.ends) != 2 || !o.ends[0] || o.ends[1] {
-		t.Fatalf("ends %v, want [true false]", o.ends)
+	if len(o.ends) != 2 || o.ends[0] || o.ends[1] {
+		t.Fatalf("ends %v, want [false false]", o.ends)
+	}
+	if got := len(chunks[0].Samples) / FrameSamples; got != hardMaxFrames {
+		t.Fatalf("the first chunk has %d frames, want %d", got, hardMaxFrames)
 	}
 	total := 0
 	for _, n := range o.frames {

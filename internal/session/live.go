@@ -197,8 +197,9 @@ func (s *Session) runSeg(l *lane, g *liveSeg, lang string) {
 		err = errors.New("the network was too slow, and the live buffer was full")
 	}
 	path := <-g.path
-	s.emit(LiveEvent{ID: g.id, Speaker: l.sp, Start: start, Done: true})
+	done := LiveEvent{ID: g.id, Speaker: l.sp, Start: start, Done: true}
 	if err != nil {
+		s.emit(done)
 		if s.liveCtx.Err() != nil {
 			return // abandoned: the chunk file stays on disk for the next start
 		}
@@ -210,7 +211,10 @@ func (s *Session) runSeg(l *lane, g *liveSeg, lang string) {
 	}
 	dur := float64(g.n) * chunk.FrameSeconds
 	res := stt.Result{Text: strings.Join(utts, " "), Segments: claudestt.Place(utts, dur)}
+	// Done comes after the final lines, so the HUD never shows neither of them.
+	// When the write fails, Save leaves the chunk file for the next start.
 	s.pipe.Save(path, l.sp, start, dur, res)
+	s.emit(done)
 }
 
 // sendFramesTo sends the frames in messages of 100 ms until the channel closes.

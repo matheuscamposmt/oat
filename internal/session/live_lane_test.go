@@ -83,17 +83,21 @@ func TestLiveWritesTheTextAndDeletesTheChunk(t *testing.T) {
 		t.Fatal(err)
 	}
 	close(op.gate)
-	var partial, done bool
-	waitFor(t, s, "the final live segment", func(ev any) bool {
+	var partial, final, done bool
+	waitFor(t, s, "the final live segment, then Done", func(ev any) bool {
 		switch e := ev.(type) {
 		case LiveEvent:
 			if e.Done {
+				if !final {
+					t.Fatal("Done came before the final lines")
+				}
 				done = true
+				return true
 			} else if e.Text == "parcial" && e.Speaker == store.Me {
 				partial = true
 			}
 		case transcribe.SegmentsEvent:
-			return len(e.Segments) == 1 && e.Segments[0].Text == "Texto ao vivo."
+			final = len(e.Segments) == 1 && e.Segments[0].Text == "Texto ao vivo."
 		}
 		return false
 	})

@@ -18,6 +18,9 @@ import (
 // Runner sends a prompt to a model and returns its answer.
 type Runner func(ctx context.Context, prompt string) (string, error)
 
+// ErrLive means that a recording or a drain uses the meeting now.
+var ErrLive = errors.New("the meeting is still recording or transcribing. Write the summary after it ends")
+
 // ErrEmpty means that the meeting has no transcript and no notes.
 var ErrEmpty = errors.New("the meeting has no transcript and no notes")
 
@@ -42,8 +45,8 @@ func Claude(bin string) Runner {
 			out, msg, err = runClaude(ctx, bin, base, prompt)
 		}
 		if err != nil {
-			if len(msg) > 300 {
-				msg = msg[:300]
+			if r := []rune(msg); len(r) > 300 {
+				msg = string(r[:300])
 			}
 			return "", fmt.Errorf("claude -p failed: %v: %s", err, msg)
 		}
@@ -123,6 +126,9 @@ var defaultTitle = regexp.MustCompile(`^Meeting \d\d:\d\d$`)
 // summary.md. When the meeting has the default title, it takes the title of
 // the answer. It returns the title of the meeting after the change.
 func Write(ctx context.Context, m *store.Meeting, run Runner) (string, error) {
+	if m.IsLive() {
+		return "", ErrLive
+	}
 	segs, err := m.Segments()
 	if err != nil {
 		return "", err
@@ -146,11 +152,16 @@ func Write(ctx context.Context, m *store.Meeting, run Runner) (string, error) {
 	if err := m.WriteSummary(md + "\n"); err != nil {
 		return "", err
 	}
-	if title != "" && defaultTitle.MatchString(meta.Title) {
-		if err := m.Update(func(mm *store.Meta) { mm.Title = title }); err != nil {
-			return "", err
-		}
-		return title, nil
+	// Claude can take minutes. Read meta.json again, so the title change does
+	// not write back an old status or end time.
+	if err := m.Reload(); err != nil {
+		return "", err
 	}
-	return meta.Title, nil
+	if cur := m.Snapshot().Title; title == "" || !defaultTitle.MatchString(cur) {
+		return cur, nil
+	}
+	if err := m.Update(func(mm *store.Meta) { mm.Title = title }); err != nil {
+		return "", err
+	}
+	return title, nil
 }

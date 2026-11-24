@@ -280,6 +280,24 @@ func (m *Meeting) Update(fn func(*Meta)) error {
 	return WriteFileAtomic(m.path(metaFile), append(data, '\n'))
 }
 
+// Reload reads meta.json again, for a process that held the meeting for a
+// long time while another one could change it.
+func (m *Meeting) Reload() error {
+	data, err := os.ReadFile(m.path(metaFile))
+	if err != nil {
+		return err
+	}
+	var meta Meta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return fmt.Errorf("read %s: %w", m.path(metaFile), err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	meta.ID = m.Meta.ID
+	m.Meta = meta
+	return nil
+}
+
 // SaveMeta writes meta.json.
 func (m *Meeting) SaveMeta() error { return m.Update(func(*Meta) {}) }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,9 @@ func meeting(t *testing.T, title string, segs []store.Segment, notes string) *st
 		t.Fatal(err)
 	}
 	if err := m.WriteNotes(notes); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Unlock(); err != nil { // the recording ended
 		t.Fatal(err)
 	}
 	return m
@@ -118,5 +122,42 @@ func TestClaudeRunnerRetriesWithoutSafeMode(t *testing.T) {
 	out, err := Claude(bin)(context.Background(), "hello")
 	if err != nil || out != "TITLE: ok\nhello" {
 		t.Fatalf("got %q %v", out, err)
+	}
+}
+
+func TestWriteKeepsAChangeMadeWhileClaudeRuns(t *testing.T) {
+	m := meeting(t, "Meeting 10:00", segs, "")
+	run := func(context.Context, string) (string, error) {
+		// Another process ends the meeting while Claude writes.
+		other, err := store.New(filepath.Dir(m.Dir)).Load(m.Snapshot().ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		end := time.Date(2026, 11, 24, 10, 30, 0, 0, time.Local)
+		if err := other.Update(func(mm *store.Meta) { mm.Status, mm.EndedAt = store.Done, end }); err != nil {
+			t.Fatal(err)
+		}
+		return "TITLE: Contrato\n\n## Resumo\nX.", nil
+	}
+	if _, err := Write(context.Background(), m, run); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.New(filepath.Dir(m.Dir)).Load(m.Snapshot().ID)
+	if got.Meta.Title != "Contrato" || got.Meta.Status != store.Done || got.Meta.EndedAt.IsZero() {
+		t.Fatalf("meta %+v: the title change wrote back an old status", got.Meta)
+	}
+}
+
+func TestWriteRefusesALiveMeeting(t *testing.T) {
+	m := meeting(t, "Meeting 10:00", segs, "")
+	if err := m.Lock(); err != nil { // a recording or a drain holds it
+		t.Fatal(err)
+	}
+	run := func(context.Context, string) (string, error) {
+		t.Fatal("ran claude for a live meeting")
+		return "", nil
+	}
+	if _, err := Write(context.Background(), m, run); !errors.Is(err, ErrLive) {
+		t.Fatalf("got %v", err)
 	}
 }
