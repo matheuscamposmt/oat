@@ -259,3 +259,86 @@ func TestRecordStoppedShowsFolderPath(t *testing.T) {
 		t.Fatalf("no folder path %q in:\n%s", f.m.Dir, view)
 	}
 }
+
+func TestRecordShowsLiveTextAndItsCorrections(t *testing.T) {
+	m, _ := recording(t, 120)
+	m, _ = m.Update(recEventMsg{session.LiveEvent{ID: 1, Speaker: store.Them, Start: 12, Text: "documentos envio"}})
+	view := ansi.Strip(m.View())
+	if strings.Contains(view, "Waiting for speech") || !strings.Contains(view, "documentos envio …") {
+		t.Fatalf("the first live line is not visible:\n%s", view)
+	}
+	if !strings.Contains(view, "claude live") && !strings.Contains(view, " live") {
+		t.Fatalf("the header does not say live:\n%s", view)
+	}
+	m, _ = m.Update(recEventMsg{session.LiveEvent{ID: 1, Speaker: store.Them, Start: 12, Text: "documentos em review"}})
+	view = ansi.Strip(m.View())
+	if strings.Contains(view, "documentos envio") || !strings.Contains(view, "documentos em review …") {
+		t.Fatalf("a correction did not replace the live line:\n%s", view)
+	}
+	m, _ = m.Update(recEventMsg{session.LiveEvent{ID: 1, Speaker: store.Them, Start: 12, Done: true}})
+	m, _ = m.Update(recEventMsg{transcribe.SegmentsEvent{Segments: []store.Segment{{Start: 12, End: 15, Speaker: store.Them, Text: "Documentos em review."}}}})
+	view = ansi.Strip(m.View())
+	if strings.Contains(view, "review …") || !strings.Contains(view, "Documentos em review.") {
+		t.Fatalf("the final line did not replace the live one:\n%s", view)
+	}
+}
+
+func TestRecordMarkGoesToTheNotes(t *testing.T) {
+	m, _ := recording(t, 120)
+	m, _ = m.Update(key("a"))
+	m, _ = m.Update(key("ctrl+b"))
+	if v := m.notes.Value(); !strings.HasPrefix(v, "a\n⚑ 00:12:3") {
+		t.Fatalf("notes %q", v)
+	}
+	if !m.notesDirty {
+		t.Fatal("the mark is not saved")
+	}
+}
+
+func TestRecordWritesTheSummaryAfterTheStop(t *testing.T) {
+	m, f := recording(t, 120)
+	var asked string
+	m.summarize = func(id string) error { asked = id; return nil }
+	m, _ = m.Update(recEventMsg{transcribe.SegmentsEvent{Segments: []store.Segment{{Start: 1, End: 2, Speaker: store.Me, Text: "oi"}}}})
+	m, _ = m.Update(key("ctrl+s"))
+	m, cmd := m.Update(recEventMsg{session.StoppedEvent{}})
+	if !strings.Contains(ansi.Strip(m.View()), "Writing the summary") {
+		t.Fatalf("no summary progress:\n%s", ansi.Strip(m.View()))
+	}
+	var done summaryDoneMsg
+	out := make(chan tea.Msg, 16)
+	var run func(c tea.Cmd)
+	run = func(c tea.Cmd) {
+		if c != nil {
+			go func() { out <- c() }()
+		}
+	}
+	run(cmd)
+	deadline := time.After(2 * time.Second)
+	for done.id == "" {
+		select {
+		case msg := <-out:
+			switch msg := msg.(type) {
+			case tea.BatchMsg:
+				for _, c := range msg {
+					run(c)
+				}
+			case summaryDoneMsg:
+				done = msg
+			}
+		case <-deadline:
+			t.Fatal("no summaryDoneMsg")
+		}
+	}
+	if asked != f.m.Snapshot().ID {
+		t.Fatalf("summarized %q", asked)
+	}
+	m, _ = m.Update(done)
+	if !strings.Contains(ansi.Strip(m.View()), "Summary ready") {
+		t.Fatal("no ready status")
+	}
+	_, cmd = m.Update(key("enter"))
+	if msg, ok := cmd().(openMeetingMsg); !ok || msg.id != asked {
+		t.Fatal("enter did not open the meeting")
+	}
+}

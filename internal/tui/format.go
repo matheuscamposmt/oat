@@ -2,11 +2,13 @@ package tui
 
 import (
 	"math"
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/matheuscamposmt/oat/internal/session"
 	"github.com/matheuscamposmt/oat/internal/store"
 )
 
@@ -92,6 +94,38 @@ func RenderTranscript(t Theme, segs []store.Segment, width int) string {
 	return b.String()
 }
 
+// RenderLive renders the open live segments under the final lines, in time
+// order. The text is dim, and it ends with "…" because it can still change.
+func RenderLive(t Theme, live map[int64]session.LiveEvent, width int) string {
+	evs := make([]session.LiveEvent, 0, len(live))
+	for _, e := range live {
+		if strings.TrimSpace(e.Text) != "" {
+			evs = append(evs, e)
+		}
+	}
+	sort.Slice(evs, func(i, j int) bool {
+		if evs[i].Start != evs[j].Start {
+			return evs[i].Start < evs[j].Start
+		}
+		return evs[i].ID < evs[j].ID
+	})
+	textWidth := max(width-prefixWidth, 10)
+	dim := t.style(t.Dim)
+	var b strings.Builder
+	for i, e := range evs {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		label := t.style(t.SpeakerColor(e.Speaker)).Width(labelWidth).Render(e.Speaker.Label())
+		lines := strings.Split(ansi.Wrap(e.Text+" …", textWidth, ""), "\n")
+		b.WriteString(dim.Render(store.Clock(e.Start)) + "  " + label + "  " + dim.Italic(true).Render(lines[0]))
+		for _, l := range lines[1:] {
+			b.WriteString("\n" + strings.Repeat(" ", prefixWidth) + dim.Italic(true).Render(l))
+		}
+	}
+	return b.String()
+}
+
 // shortModel returns a short name for the HUD.
 func shortModel(model string) string {
 	switch model {
@@ -99,6 +133,8 @@ func shortModel(model string) string {
 		return "turbo"
 	case "whisper-large-v3":
 		return "large-v3"
+	case "claude-voice-stream":
+		return "claude"
 	}
 	return model
 }

@@ -187,18 +187,32 @@ func TestLiveSession(t *testing.T) {
 	cfg.Echo = "off"
 	st := store.New(t.TempDir())
 	var opened sync.Map
+	speed := 5.0
+	client := claudestt.New(creds, "oat/live-test")
+	var live LiveFunc
+	var liveEvents int
+	if os.Getenv("OAT_LIVE_MODE") == "live" {
+		speed = 1 // the live stream must get real time
+		live = func(ctx context.Context, lang string, onText func(string)) (LiveStream, error) {
+			st, err := client.Open(ctx, lang, onText)
+			if err != nil {
+				return nil, err
+			}
+			return st, nil
+		}
+	}
 	s, err := Start(context.Background(), Options{
 		Title: "Live session", Config: cfg, Store: st,
-		Client: claudestt.New(creds, "oat/live-test"),
-		Pactl:  audio.NewPactl(),
+		Client: client, Live: live,
+		Pactl: audio.NewPactl(),
 		Open: func(ctx context.Context, dev string) (Source, error) {
 			if _, again := opened.LoadOrStore(dev, true); again {
 				return nil, fmt.Errorf("device %s opened twice", dev)
 			}
 			if strings.HasSuffix(dev, ".monitor") {
-				return newFileSource(them, 5), nil
+				return newFileSource(them, speed), nil
 			}
-			return newFileSource(me, 5), nil
+			return newFileSource(me, speed), nil
 		},
 	})
 	if err != nil {
@@ -206,7 +220,7 @@ func TestLiveSession(t *testing.T) {
 	}
 	t0 := time.Now()
 	var segs, warnings int
-	stopAt := time.After(time.Duration(secs) * time.Second / 5)
+	stopAt := time.After(time.Duration(float64(secs) * float64(time.Second) / speed))
 	for {
 		select {
 		case <-stopAt:
@@ -216,11 +230,13 @@ func TestLiveSession(t *testing.T) {
 			switch e := ev.(type) {
 			case transcribe.SegmentsEvent:
 				segs += len(e.Segments)
+			case LiveEvent:
+				liveEvents++
 			case transcribe.Warning:
 				warnings++
 				t.Logf("warning: %+v", e)
 			case StoppedEvent:
-				t.Logf("stopped after %v, err=%v; %d segments, %d warnings", time.Since(t0).Round(time.Second), e.Err, segs, warnings)
+				t.Logf("stopped after %v, err=%v; %d segments, %d warnings, %d live events", time.Since(t0).Round(time.Second), e.Err, segs, warnings, liveEvents)
 				md, _ := os.ReadFile(filepath.Join(filepath.Dir(s.Meeting().ChunksDir()), "transcript.md"))
 				t.Logf("transcript.md:\n%s", md)
 				meta := s.Meeting().Snapshot()
@@ -229,7 +245,7 @@ func TestLiveSession(t *testing.T) {
 				}
 				return
 			}
-		case <-time.After(3 * time.Minute):
+		case <-time.After(4 * time.Minute):
 			t.Fatal("no StoppedEvent")
 		}
 	}

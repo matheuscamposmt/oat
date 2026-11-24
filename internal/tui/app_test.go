@@ -104,12 +104,16 @@ func TestViewerShowsAndEditsNotes(t *testing.T) {
 	}
 	v, _ = v.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	view := ansi.Strip(v.View())
-	if !strings.Contains(view, "sobre o prazo") || !strings.Contains(view, "- prazo") {
-		t.Fatalf("view:\n%s", view)
+	if !strings.Contains(view, "sobre o prazo") || !strings.Contains(view, "Resumo final") {
+		t.Fatalf("the viewer must open on the summary:\n%s", view)
 	}
 	v, _ = v.Update(key("s"))
-	if !strings.Contains(ansi.Strip(v.View()), "Resumo final") {
-		t.Fatal("s did not show the summary")
+	if !strings.Contains(ansi.Strip(v.View()), "- prazo") {
+		t.Fatal("s did not show the notes")
+	}
+	v, cmd := v.Update(key("y"))
+	if cmd == nil || !strings.Contains(ansi.Strip(v.View()), "Copied the notes.") {
+		t.Fatal("y did not copy the notes")
 	}
 	v, _ = v.Update(key("e"))
 	v, _ = v.Update(key("x"))
@@ -117,7 +121,7 @@ func TestViewerShowsAndEditsNotes(t *testing.T) {
 	if notes, _ := m.Notes(); !strings.HasSuffix(notes, "x") {
 		t.Fatalf("notes.md = %q", notes)
 	}
-	_, cmd := v.Update(key("esc"))
+	_, cmd = v.Update(key("esc"))
 	if msg, ok := cmd().(backHomeMsg); !ok || msg.from != viewerScreen {
 		t.Fatal("esc did not go back home from the viewer")
 	}
@@ -258,5 +262,42 @@ func TestAppShowsFatalDrainWarning(t *testing.T) {
 	model, _ = model.Update(drainEventMsg{transcribe.Warning{Fatal: true, Msg: "Groq rejected the API key"}})
 	if view := ansi.Strip(model.(app).View().Content); !strings.Contains(view, "Groq rejected the API key") {
 		t.Fatalf("no drain warning on the home screen:\n%s", view)
+	}
+}
+
+func TestViewerRewritesTheSummary(t *testing.T) {
+	st := store.New(t.TempDir())
+	m, _ := st.Create("Meeting 10:00", time.Now(), "pt", "m", "auto")
+	m.AppendSegments([]store.Segment{{Start: 1, End: 2, Speaker: store.Them, Text: "sobre o prazo"}})
+	m.Unlock()
+	v, err := newViewerModel(theme, st, m.Meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.summarize = func(id string) error {
+		mm, _ := st.Load(id)
+		return mm.WriteSummary("# Prazo do projeto\n\nTexto novo.")
+	}
+	v, _ = v.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	v, cmd := v.Update(key("r"))
+	if !strings.Contains(ansi.Strip(v.View()), "Writing the summary") {
+		t.Fatal("no progress after r")
+	}
+	v, _ = v.Update(cmd())
+	if view := ansi.Strip(v.View()); !strings.Contains(view, "Texto novo.") || !strings.Contains(view, "Summary saved.") {
+		t.Fatalf("view after the summary:\n%s", view)
+	}
+}
+
+func TestHomeSummarizesTheSelectedMeeting(t *testing.T) {
+	h, _ := homeWith(t)
+	var got string
+	h.summarize = func(id string) error { got = id; return nil }
+	h, cmd := h.Update(key("s"))
+	if cmd == nil || !strings.Contains(ansi.Strip(h.View()), "writing summary…") {
+		t.Fatalf("no badge after s:\n%s", ansi.Strip(h.View()))
+	}
+	if msg, ok := cmd().(summaryDoneMsg); !ok || msg.id == "" || got != msg.id {
+		t.Fatalf("got %v, summarized %q", msg, got)
 	}
 }

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -26,6 +27,7 @@ import (
 	"github.com/matheuscamposmt/oat/internal/mcpserver"
 	"github.com/matheuscamposmt/oat/internal/session"
 	"github.com/matheuscamposmt/oat/internal/store"
+	"github.com/matheuscamposmt/oat/internal/summary"
 	"github.com/matheuscamposmt/oat/internal/transcribe"
 	"github.com/matheuscamposmt/oat/internal/tui"
 )
@@ -37,6 +39,7 @@ const usage = `oat records meetings from the terminal and transcribes them.
 Usage:
   oat                  open the list of meetings
   oat new [title]      start a recording now
+  oat summary [id]     write summary.md with Claude Code (default: the latest meeting)
   oat mcp              run the MCP server (Claude Code starts it)
   oat doctor           test the environment
   oat setup            register the MCP server in Claude Code
@@ -63,6 +66,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runHUD(cmd == "new", args, stderr)
 	case "mcp":
 		return runMCP(stderr)
+	case "summary":
+		return runSummary(args, stdout, stderr)
 	case "doctor":
 		return runDoctor(stdout, stderr)
 	case "setup":
@@ -163,6 +168,7 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 		Drain: func(ctx context.Context, emit func(any)) {
 			session.Drain(ctx, st, client, cfg, emit)
 		},
+		Summarize: summarizer(cfg),
 		AutoStart: isNew,
 		NewTitle:  title,
 	}
@@ -170,6 +176,85 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	return 0
+}
+
+// summarizer returns the function that writes the summary after a meeting,
+// or nil when auto_summary is off or Claude Code is not installed. It runs
+// "oat summary" in its own session, so the summary ends even when you quit
+// oat, or press ctrl+c, while it runs.
+func summarizer(cfg config.Config) func(id string) error {
+	if !cfg.AutoSummary {
+		return nil
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		return nil
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	return func(id string) error {
+		cmd := exec.Command(self, "summary", "--notify", id)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		var errOut bytes.Buffer
+		cmd.Stderr = &errOut
+		if err := cmd.Run(); err != nil {
+			if msg := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(errOut.String()), "oat:")); msg != "" {
+				return errors.New(msg)
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+func runSummary(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("summary", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	notify := fs.Bool("notify", false, "")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	st := store.New(paths.Meetings())
+	var m *store.Meeting
+	if id := fs.Arg(0); id == "" || id == "latest" {
+		m, err = st.Latest()
+	} else {
+		m, err = st.Load(id)
+	}
+	if err != nil {
+		return fail(stderr, err)
+	}
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return fail(stderr, errors.New("claude is not installed. Install Claude Code to write summaries"))
+	}
+	title, err := summary.Write(context.Background(), m, summary.Claude(bin))
+	if *notify {
+		sendNotification(title, err)
+	}
+	if err != nil {
+		return fail(stderr, err)
+	}
+	fmt.Fprintln(stdout, m.SummaryPath())
+	return 0
+}
+
+// sendNotification shows a desktop notification when notify-send exists.
+func sendNotification(title string, err error) {
+	bin, lerr := exec.LookPath("notify-send")
+	if lerr != nil {
+		return
+	}
+	body := "Summary ready: " + title
+	if err != nil {
+		body = "The summary failed: " + err.Error()
+	}
+	_ = exec.Command(bin, "--app-name=oat", "oat", body).Run()
 }
 
 // newClient returns the client of the configured backend. It never reads the
@@ -241,6 +326,7 @@ func runDoctor(stdout, stderr io.Writer) int {
 		ConfigPath:   paths.Config,
 		ConfigErr:    cfgErr,
 		ExpiryMargin: claudestt.ExpiryMargin,
+		AutoSummary:  cfg.AutoSummary,
 		LookPath:     exec.LookPath,
 		Pactl:        pactl,
 		Transcriber:  cfg.Transcriber,

@@ -37,6 +37,8 @@ type homeModel struct {
 	confirmDelete bool
 	starting      bool // the app sets it while a recording starts
 	drain         map[string]int
+	summarize     func(id string) error // nil turns the summary off
+	writing       map[string]bool       // meetings whose summary is being written
 	err           string
 	width         int
 	height        int
@@ -49,7 +51,7 @@ func newHomeModel(t Theme, st *store.Store) homeModel {
 	title := textinput.New()
 	title.Prompt = "Title: "
 	title.Placeholder = "empty for Meeting HH:MM"
-	return homeModel{theme: t, st: st, filter: filter, title: title, drain: map[string]int{}}
+	return homeModel{theme: t, st: st, filter: filter, title: title, drain: map[string]int{}, writing: map[string]bool{}}
 }
 
 func loadRows(st *store.Store) tea.Cmd {
@@ -189,6 +191,13 @@ func (h homeModel) key(k tea.KeyPressMsg) (homeModel, tea.Cmd) {
 		if _, ok := h.selected(); ok {
 			h.confirmDelete = true
 		}
+	case "s":
+		r, ok := h.selected()
+		if !ok || h.summarize == nil || h.writing[r.Meta.ID] || r.Meta.Status == store.Recording {
+			return h, nil
+		}
+		h.writing[r.Meta.ID] = true
+		return h, summarizeCmd(h.summarize, r.Meta.ID)
 	case "q", "ctrl+c":
 		return h, msgCmd(quitRequestMsg{})
 	}
@@ -237,7 +246,10 @@ func (h homeModel) View() string {
 	case h.starting:
 		bottom = "  " + dim.Render("Starting the recording…")
 	}
-	keys := "n new · enter open · / filter · d delete · q quit"
+	keys := "n new · enter open · s summary · / filter · d delete · q quit"
+	if h.summarize == nil {
+		keys = "n new · enter open · / filter · d delete · q quit"
+	}
 	if h.naming {
 		keys = "enter start recording · esc cancel"
 	}
@@ -268,6 +280,9 @@ func (h homeModel) row(r homeRow, selected bool) string {
 	var badges []string
 	if n, ok := h.drain[r.Meta.ID]; ok {
 		badges = append(badges, fmt.Sprintf("%d chunks left", n))
+	}
+	if h.writing[r.Meta.ID] {
+		badges = append(badges, "writing summary…")
 	}
 	if r.Notes {
 		badges = append(badges, "notes")

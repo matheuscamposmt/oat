@@ -26,7 +26,7 @@ func TestLoadFileOverridesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{Transcriber: "claude", Live: true, Lang: "en", Model: "whisper-large-v3-turbo", Echo: "auto", KeepAudio: true}
+	want := Config{Transcriber: "claude", Live: true, AutoSummary: true, Lang: "en", Model: "whisper-large-v3-turbo", Echo: "auto", KeepAudio: true}
 	if cfg != want {
 		t.Fatalf("got %+v, want %+v", cfg, want)
 	}
@@ -44,7 +44,7 @@ func TestLoadBadFile(t *testing.T) {
 
 func TestApplyFlags(t *testing.T) {
 	got := Default().Apply(Overrides{Lang: "en", Echo: "off"})
-	want := Config{Transcriber: "claude", Live: true, Lang: "en", Model: "whisper-large-v3-turbo", Echo: "off"}
+	want := Config{Transcriber: "claude", Live: true, AutoSummary: true, Lang: "en", Model: "whisper-large-v3-turbo", Echo: "off"}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
