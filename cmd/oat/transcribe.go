@@ -100,7 +100,8 @@ func runTranscribe(args []string, stdout, stderr io.Writer) int {
 	}
 	waitErr := cmd.Wait()
 	if txErr != nil {
-		return fail(stderr, txErr)
+		fmt.Fprintf(stderr, "oat: %v\n%s", txErr, ffErr.String())
+		return 1
 	}
 	if waitErr != nil {
 		fmt.Fprintf(stderr, "oat: ffmpeg could not decode %s: %v\n%s", path, waitErr, ffErr.String())
