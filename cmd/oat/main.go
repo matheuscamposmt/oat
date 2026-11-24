@@ -320,8 +320,11 @@ func newClient(cfg config.Config, paths config.Paths) (transcribe.Client, *claud
 }
 
 // keytermsFor returns the key terms of a recording. set names the list; without
-// it, the title picks one.
+// it, the title picks one. A default title gives no words.
 func keytermsFor(lists []keyterms.List, flag, set, title string) ([]string, error) {
+	if store.IsDefaultTitle(title) {
+		title = ""
+	}
 	list, err := keyterms.Pick(lists, set, title)
 	if err != nil {
 		return nil, err

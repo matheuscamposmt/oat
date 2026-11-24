@@ -10,8 +10,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matheuscamposmt/oat/internal/keyterms"
+	"github.com/matheuscamposmt/oat/internal/store"
 	"github.com/matheuscamposmt/oat/internal/stt"
 )
 
@@ -214,5 +216,12 @@ func TestSetupWithoutFoldersScansNothing(t *testing.T) {
 	offerScan(context.Background(), bufio.NewReader(strings.NewReader("\n")), &out, filepath.Join(t.TempDir(), "config.toml"))
 	if len(*folders) != 0 || strings.Contains(out.String(), "go to Claude") {
 		t.Fatalf("scanned %q:\n%s", *folders, out.String())
+	}
+}
+
+func TestDefaultTitleGivesNoTerms(t *testing.T) {
+	got, err := keytermsFor(nil, "", "", store.DefaultTitle(time.Date(2026, 11, 24, 14, 30, 0, 0, time.Local)))
+	if err != nil || got[0] != "MCP" {
+		t.Fatalf("got %q %v", got, err)
 	}
 }

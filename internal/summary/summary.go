@@ -126,8 +126,6 @@ func Parse(answer string) (title, md string) {
 	return title, answer
 }
 
-var defaultTitle = regexp.MustCompile(`^Meeting \d\d:\d\d$`)
-
 // Write asks the runner for the notes of a meeting and saves them as
 // summary.md. When the meeting has the default title, it takes the title of
 // the answer. It returns the title of the meeting after the change.
@@ -163,7 +161,7 @@ func Write(ctx context.Context, m *store.Meeting, run Runner) (string, error) {
 	if err := m.Reload(); err != nil {
 		return "", err
 	}
-	if cur := m.Snapshot().Title; title == "" || !defaultTitle.MatchString(cur) {
+	if cur := m.Snapshot().Title; title == "" || !store.IsDefaultTitle(cur) {
 		return cur, nil
 	}
 	if err := m.Update(func(mm *store.Meta) { mm.Title = title }); err != nil {
