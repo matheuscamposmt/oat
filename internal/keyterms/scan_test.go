@@ -55,3 +55,10 @@ func TestClaudeScannerRunsInTheFolderWithReadOnlyTools(t *testing.T) {
 		t.Fatalf("prompt %q", read("stdin"))
 	}
 }
+
+func TestParseTermsDropsAccents(t *testing.T) {
+	got, err := ParseTerms(`["Supernó", "Vinícius", "superno"]`)
+	if err != nil || strings.Join(got, "|") != "Superno|Vinicius" {
+		t.Fatalf("got %q %v", got, err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/matheuscamposmt/oat/internal/store"
 	"github.com/matheuscamposmt/oat/internal/summary"
 )
 
@@ -37,8 +38,8 @@ func Claude(bin string) Scanner {
 	}
 }
 
-// ParseTerms reads the JSON array of an answer. It drops empty terms and
-// case-insensitive duplicates, and keeps MaxTerms terms.
+// ParseTerms reads the JSON array of an answer. It removes accents, drops
+// empty terms and case-insensitive duplicates, and keeps MaxTerms terms.
 func ParseTerms(answer string) ([]string, error) {
 	i, j := strings.Index(answer, "["), strings.LastIndex(answer, "]")
 	var raw []string
@@ -48,7 +49,7 @@ func ParseTerms(answer string) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
 	for _, t := range raw {
-		t = strings.TrimSpace(t)
+		t = strings.TrimSpace(store.Unaccent(t))
 		if t == "" || seen[strings.ToLower(t)] || len(out) == MaxTerms {
 			continue
 		}
