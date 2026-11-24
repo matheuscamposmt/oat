@@ -174,3 +174,18 @@ func TestPing(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestTranscribeSendsKeytermsInPrompt(t *testing.T) {
+	for prompt, want := range map[string]string{"fim da frase": "Entra ID, Vinícius. fim da frase", "": "Entra ID, Vinícius."} {
+		c := server(t, func(w http.ResponseWriter, r *http.Request) {
+			r.ParseMultipartForm(1 << 20)
+			if got := r.FormValue("prompt"); got != want {
+				t.Errorf("prompt %q, want %q", got, want)
+			}
+			w.Write([]byte(`{"text":""}`))
+		})
+		if _, err := c.Transcribe(context.Background(), nil, Options{Model: "m", Prompt: prompt, Keyterms: []string{"Entra ID", "Vinícius"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

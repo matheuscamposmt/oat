@@ -40,7 +40,7 @@ type Stream struct {
 // of the stream, so it must not block. Open waits for a free slot when the
 // Client already has Streams streams open.
 func (c *Client) Open(ctx context.Context, lang string, onText func(string)) (*Stream, error) {
-	return c.open(ctx, ctx, lang, onText)
+	return c.open(ctx, ctx, lang, "", onText)
 }
 
 func (c *Client) slots() chan struct{} {
@@ -54,7 +54,7 @@ func (c *Client) slots() chan struct{} {
 	return c.sem
 }
 
-func (c *Client) open(outer, ctx context.Context, lang string, onText func(string)) (*Stream, error) {
+func (c *Client) open(outer, ctx context.Context, lang, keyterms string, onText func(string)) (*Stream, error) {
 	sem := c.slots()
 	select {
 	case sem <- struct{}{}:
@@ -64,7 +64,7 @@ func (c *Client) open(outer, ctx context.Context, lang string, onText func(strin
 		}
 		return nil, &stt.TemporaryError{Service: service, Err: errors.New("no free stream slot")}
 	}
-	conn, err := c.dial(ctx, outer, lang)
+	conn, err := c.dial(ctx, outer, lang, keyterms)
 	if err != nil {
 		<-sem
 		return nil, err

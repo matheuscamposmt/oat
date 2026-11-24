@@ -25,6 +25,7 @@ type fakeServer struct {
 	mu      sync.Mutex
 	queries []string
 	auth    []string
+	headers []http.Header
 	audio   int
 }
 
@@ -35,6 +36,7 @@ func newServer(t *testing.T, status int, handle func(ctx context.Context, c *web
 		f.mu.Lock()
 		f.queries = append(f.queries, r.URL.RawQuery)
 		f.auth = append(f.auth, r.Header.Get("Authorization"))
+		f.headers = append(f.headers, r.Header.Clone())
 		f.mu.Unlock()
 		if status != 0 {
 			if status == http.StatusTooManyRequests {
@@ -536,5 +538,42 @@ func TestCloseDropsTheStream(t *testing.T) {
 	}
 	if err := st.Send([]byte{0, 0}); err == nil {
 		t.Fatal("Send after Close worked")
+	}
+}
+
+func TestEncodeKeyterms(t *testing.T) {
+	got := EncodeKeyterms([]string{"Entra ID", "GST", "Vinícius", "a,b", " ", "GST", "  Data   Mart "})
+	if got != "Entra ID,GST,Vincius,a b,Data Mart" {
+		t.Fatalf("got %q", got)
+	}
+	long := []string{strings.Repeat("x", 1000), strings.Repeat("y", 30), "z"}
+	if got := EncodeKeyterms(long); got != strings.Repeat("x", 1000) {
+		t.Fatalf("limit: %d chars", len(got))
+	}
+}
+
+func transcribeKeyterms(t *testing.T, keyterms []string) http.Header {
+	t.Helper()
+	srv, f := newServer(t, 0, func(ctx context.Context, c *websocket.Conn, f *fakeServer) {
+		readUntilClose(ctx, c, f)
+		_ = c.Close(websocket.StatusNormalClosure, "")
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := testClient(t, srv).Transcribe(ctx, wav(1), stt.Options{Language: "pt", Keyterms: keyterms}); err != nil {
+		t.Fatal(err)
+	}
+	return f.headers[0]
+}
+
+func TestTranscribeSendsKeytermsHeader(t *testing.T) {
+	if got := transcribeKeyterms(t, []string{"Entra ID", "GST"}).Get("x-config-keyterms"); got != "Entra ID,GST" {
+		t.Fatalf("header %q", got)
+	}
+}
+
+func TestTranscribeWithoutKeytermsSendsNoHeader(t *testing.T) {
+	if v := transcribeKeyterms(t, nil).Values("x-config-keyterms"); v != nil {
+		t.Fatalf("header %q", v)
 	}
 }
