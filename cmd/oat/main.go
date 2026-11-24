@@ -40,28 +40,39 @@ var version = "dev"
 const usage = `oat records meetings from the terminal and transcribes them.
 
 Usage:
-  oat                  open the list of meetings
-  oat new [title]      start a recording now
-  oat summary [id]     write summary.md with Claude Code (default: the latest meeting)
-  oat transcribe FILE  print the text of an audio file
-  oat mcp              run the MCP server (Claude Code starts it)
-  oat doctor           test the environment
-  oat setup            register the MCP server in Claude Code
-  oat version          print the version
+  oat                       open the list of meetings
+  oat new [title]           start a recording now
+  oat summary [id]          write summary.md with Claude Code (default: the latest meeting)
+  oat transcribe FILE       print the text of an audio file
+  oat keyterms list [NAME]  show the key term lists, or the terms that one list sends
+  oat keyterms add NAME TERM...
+                            add terms to a list, or create it
+  oat keyterms rm NAME TERM...
+                            remove terms from a list
+  oat keyterms scan FOLDER [--name NAME]
+                            propose a list from the documents of a folder, with Claude Code
+  oat keyterms scan --all   scan again each list that has a folder
+  oat mcp                   run the MCP server (Claude Code starts it)
+  oat doctor                test the environment
+  oat setup                 register the MCP server in Claude Code and offer the scan
+  oat version               print the version
 
 Flags for oat and oat new:
-  --transcriber S  claude (the Claude Code voice stream) or groq
-  --no-live        claude only: send each chunk after its pause, not while people speak
-  --lang CODE      language of the meeting: pt, en, or auto
-  --model NAME     Groq only: whisper-large-v3-turbo or whisper-large-v3
-  --echo MODE      echo cancel: auto, on, or off
-  --keep-audio     keep the WAV chunks in the meeting folder
+  --transcriber S      claude (the Claude Code voice stream) or groq
+  --no-live            claude only: send each chunk after its pause, not while people speak
+  --lang CODE          language of the meeting: pt, en, or auto
+  --model NAME         Groq only: whisper-large-v3-turbo or whisper-large-v3
+  --echo MODE          echo cancel: auto, on, or off
+  --keep-audio         keep the WAV chunks in the meeting folder
+  --keyterms LIST      names and acronyms, separated by commas
+  --keyterms-set NAME  the key term list (default: the first list whose name is in the title)
 
 Flags for oat transcribe:
-  --transcriber S  claude or groq
-  --lang CODE      pt, en, or auto
-  --model NAME     Groq only
-  --keyterms LIST  names and acronyms, separated by commas
+  --transcriber S      claude or groq
+  --lang CODE          pt, en, or auto
+  --model NAME         Groq only
+  --keyterms LIST      names and acronyms, separated by commas
+  --keyterms-set NAME  the key term list
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
