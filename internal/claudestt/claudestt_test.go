@@ -428,3 +428,113 @@ func TestCredentialsPath(t *testing.T) {
 		t.Fatalf("got %q", p)
 	}
 }
+
+func TestStreamSendsPartialText(t *testing.T) {
+	srv, _ := newServer(t, 0, func(ctx context.Context, c *websocket.Conn, f *fakeServer) {
+		_, _, _ = c.Read(ctx) // KeepAlive
+		_, _, _ = c.Read(ctx) // audio
+		send(ctx, c, "TranscriptText", "Bom")
+		send(ctx, c, "TranscriptText", "Bom dia")
+		send(ctx, c, "TranscriptEndpoint", "")
+		send(ctx, c, "TranscriptText", "Vamos")
+		readUntilClose(ctx, c, f)
+		send(ctx, c, "TranscriptText", "Vamos lá.")
+		send(ctx, c, "TranscriptEndpoint", "")
+		_ = c.Close(websocket.StatusNormalClosure, "")
+	})
+	var mu sync.Mutex
+	var seen []string
+	st, err := testClient(t, srv).Open(context.Background(), "pt", func(s string) {
+		mu.Lock()
+		seen = append(seen, s)
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Send(make([]byte, 3200)); err != nil {
+		t.Fatal(err)
+	}
+	utts, err := st.Finish()
+	if err != nil || strings.Join(utts, "|") != "Bom dia|Vamos lá." {
+		t.Fatalf("got %q %v", utts, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"Bom", "Bom dia", "Bom dia Vamos", "Bom dia Vamos lá."}
+	if strings.Join(seen, "|") != strings.Join(want, "|") {
+		t.Fatalf("partial texts %q, want %q", seen, want)
+	}
+	if st.Alive() {
+		t.Fatal("the stream is alive after Finish")
+	}
+}
+
+func TestStreamsWaitForAFreeSlot(t *testing.T) {
+	release := make(chan struct{})
+	srv, f := newServer(t, 0, func(ctx context.Context, c *websocket.Conn, f *fakeServer) {
+		readUntilClose(ctx, c, f)
+		<-release
+		_ = c.Close(websocket.StatusNormalClosure, "")
+	})
+	c := testClient(t, srv)
+	c.Streams = 1
+	first, err := c.Open(context.Background(), "pt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := make(chan *Stream, 1)
+	go func() {
+		s, err := c.Open(context.Background(), "pt", nil)
+		if err != nil {
+			t.Error(err)
+		}
+		opened <- s
+	}()
+	select {
+	case <-opened:
+		t.Fatal("a second stream opened while the only slot was taken")
+	case <-time.After(200 * time.Millisecond):
+	}
+	go func() { _, _ = first.Finish() }()
+	close(release)
+	select {
+	case s := <-opened:
+		s.Close()
+	case <-time.After(3 * time.Second):
+		t.Fatal("the second stream did not open after the first ended")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.queries) != 2 {
+		t.Fatalf("%d connections, want 2", len(f.queries))
+	}
+}
+
+func TestRateLimitCloseIsARateLimit(t *testing.T) {
+	srv, _ := newServer(t, 0, func(ctx context.Context, c *websocket.Conn, f *fakeServer) {
+		_ = c.Close(4029, "Rate limit exceeded. Wait a few seconds before retrying.")
+	})
+	_, err := transcribe(t, testClient(t, srv), 1, "pt")
+	var rl *stt.RateLimitError
+	if !errors.As(err, &rl) || rl.RetryAfter != rateLimitWait {
+		t.Fatalf("got %T %v", err, err)
+	}
+}
+
+func TestCloseDropsTheStream(t *testing.T) {
+	srv, _ := newServer(t, 0, func(ctx context.Context, c *websocket.Conn, f *fakeServer) {
+		<-ctx.Done()
+	})
+	st, err := testClient(t, srv).Open(context.Background(), "pt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if st.Alive() {
+		t.Fatal("alive after Close")
+	}
+	if err := st.Send([]byte{0, 0}); err == nil {
+		t.Fatal("Send after Close worked")
+	}
+}

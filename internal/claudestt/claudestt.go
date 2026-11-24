@@ -20,7 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -44,11 +44,21 @@ const (
 	defaultRetryAfter = 30 * time.Second
 	maxRetryAfter     = time.Hour
 
+	// statusRateLimit is the close code of the server when too many streams
+	// are open: "Rate limit exceeded. Wait a few seconds before retrying."
+	statusRateLimit = websocket.StatusCode(4029)
+	rateLimitWait   = 5 * time.Second
+	// The server refuses a sixth stream at the same time. MaxStreams is the
+	// default limit of the client.
+	MaxStreams     = 4
+	keepAliveEvery = 8 * time.Second
+	writeTimeout   = 10 * time.Second
+
 	msgKeepAlive   = `{"type":"KeepAlive"}`
 	msgCloseStream = `{"type":"CloseStream"}`
 )
 
-// Client sends one chunk per WebSocket connection.
+// Client opens streams to the voice endpoint. It is safe for concurrent use.
 type Client struct {
 	URL             string
 	CredentialsPath string
@@ -64,6 +74,12 @@ type Client struct {
 	Finish time.Duration
 	// Timeout bounds one call from the dial to the last message.
 	Timeout time.Duration
+
+	// Streams is the most streams open at the same time, for live streams and
+	// for Transcribe together. MaxStreams when zero.
+	Streams int
+	semOnce sync.Once
+	sem     chan struct{}
 
 	// Trace, when set, gets the reason that ended each stream. Tests use it.
 	Trace func(reason string, endpoints int)
@@ -159,7 +175,8 @@ func (c *Client) now() time.Time {
 	return time.Now()
 }
 
-// Transcribe sends one WAV file from chunk.EncodeWAV and returns its transcript.
+// Transcribe sends one WAV file from chunk.EncodeWAV over its own stream,
+// as fast as the connection takes it, and returns its transcript.
 // The endpoint gives no times, so the segments divide the chunk by text length.
 func (c *Client) Transcribe(ctx context.Context, wav []byte, opts stt.Options) (stt.Result, error) {
 	pcm := wav
@@ -172,115 +189,29 @@ func (c *Client) Transcribe(ctx context.Context, wav []byte, opts stt.Options) (
 	// outer is the context of the caller. ctx also ends at the timeout of the
 	// call, and then the errors are temporary.
 	outer := ctx
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	if c.Timeout > 0 {
-		var cancelT context.CancelFunc
-		ctx, cancelT = context.WithTimeout(ctx, c.Timeout)
-		defer cancelT()
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
+		defer cancel()
 	}
-	conn, err := c.dial(ctx, outer, opts.Language)
+	st, err := c.open(outer, ctx, opts.Language, nil)
 	if err != nil {
 		return stt.Result{}, err
 	}
-	defer conn.CloseNow()
-
-	// One channel keeps the order: the messages first, then the read error.
-	// With two channels, select can take the close before the last text.
-	events := make(chan readEvent, 64)
-	go func() {
-		for {
-			_, data, err := conn.Read(ctx)
-			if err != nil {
-				events <- readEvent{err: err} // the buffer holds it: no send follows
-				return
-			}
-			var m message
-			if json.Unmarshal(data, &m) == nil {
-				select {
-				case events <- readEvent{msg: m}:
-				case <-ctx.Done():
-					return
-				}
-			}
+	defer st.Close()
+	for i := 0; i < len(pcm); i += frameBytes {
+		if c.beforeLastFrame != nil && i+frameBytes >= len(pcm) {
+			c.beforeLastFrame()
 		}
-	}()
-
-	// sent is true when all the audio frames are written. The server can answer
-	// CloseStream and close before sendErr reaches the loop below.
-	var sent atomic.Bool
-	sendErr := make(chan error, 1)
-	go func() { sendErr <- sendAudio(ctx, conn, pcm, &sent, c.beforeLastFrame) }()
-
-	var col collector
-	var closed bool // CloseStream was sent
-	var finish, quiet, idle <-chan time.Time
-	for {
-		select {
-		case err := <-sendErr:
-			if err != nil {
-				// A close by the server breaks the write. The read gives the reason.
-				timeout := time.After(2 * time.Second)
-			wait:
-				for {
-					select {
-					case ev := <-events:
-						if ev.err != nil {
-							err = ev.err
-							break wait
-						}
-					case <-timeout:
-						break wait
-					}
-				}
-				return stt.Result{}, c.streamError(outer, ctx, err)
-			}
-			closed = true
-			finish = time.After(c.Finish)
-			idle = time.After(c.Idle)
-		case ev := <-events:
-			if ev.err != nil {
-				st := websocket.CloseStatus(ev.err)
-				switch {
-				case !closed && !sent.Load():
-					// The server ended the stream before it got all the audio.
-					return stt.Result{}, c.streamError(outer, ctx, ev.err)
-				case st == websocket.StatusNormalClosure || st == websocket.StatusNoStatusRcvd:
-					return c.end("server close", &col, len(pcm)), nil
-				case st == -1 && col.endpoints > 0 && ctx.Err() == nil:
-					return c.end("connection end", &col, len(pcm)), nil // the connection ended after the final text
-				}
-				return stt.Result{}, c.streamError(outer, ctx, ev.err)
-			}
-			m := ev.msg
-			if closed {
-				idle = time.After(c.Idle)
-			}
-			switch m.Type {
-			case "TranscriptInterim", "TranscriptText":
-				col.text(m.Data)
-				quiet = nil
-			case "TranscriptEndpoint":
-				col.endpoint()
-				if closed {
-					quiet = time.After(c.Quiet)
-				}
-			case "TranscriptError":
-				msg := firstNonEmpty(m.Description, m.ErrorCode, "unknown transcription error")
-				return stt.Result{}, &stt.RequestError{Service: service, Status: 0, Msg: msg}
-			case "error":
-				return stt.Result{}, &stt.TemporaryError{Service: service, Err: errors.New(firstNonEmpty(m.Message, "server error"))}
-			}
-		case <-quiet:
-			return c.end("quiet", &col, len(pcm)), nil
-		case <-idle:
-			return c.end("idle", &col, len(pcm)), nil
-		case <-finish:
-			return c.end("finish", &col, len(pcm)), nil
-		case <-outer.Done():
-			return stt.Result{}, outer.Err()
+		if err := st.Send(pcm[i:min(i+frameBytes, len(pcm))]); err != nil {
+			return stt.Result{}, err
 		}
 	}
+	utts, err := st.Finish()
+	if err != nil {
+		return stt.Result{}, err
+	}
+	return c.result(utts, len(pcm)), nil
 }
 
 type readEvent struct {
@@ -300,6 +231,9 @@ func (c *Client) streamError(outer, ctx context.Context, err error) error {
 	var ce websocket.CloseError
 	if errors.As(err, &ce) && ce.Code == websocket.StatusUnsupportedData {
 		return &stt.RequestError{Service: service, Status: int(ce.Code), Msg: ce.Reason}
+	}
+	if errors.As(err, &ce) && ce.Code == statusRateLimit {
+		return &stt.RateLimitError{Service: service, RetryAfter: rateLimitWait}
 	}
 	if st := websocket.CloseStatus(err); st == websocket.StatusNormalClosure || st == websocket.StatusNoStatusRcvd {
 		return &stt.TemporaryError{Service: service, Err: errors.New("the server ended the stream before the end of the audio")}
@@ -348,22 +282,6 @@ func (c *Client) dial(ctx, outer context.Context, lang string) (*websocket.Conn,
 	}
 	conn.SetReadLimit(1 << 20)
 	return conn, nil
-}
-
-func sendAudio(ctx context.Context, conn *websocket.Conn, pcm []byte, sent *atomic.Bool, beforeLast func()) error {
-	if err := conn.Write(ctx, websocket.MessageText, []byte(msgKeepAlive)); err != nil {
-		return err
-	}
-	for i := 0; i < len(pcm); i += frameBytes {
-		if beforeLast != nil && i+frameBytes >= len(pcm) {
-			beforeLast()
-		}
-		if err := conn.Write(ctx, websocket.MessageBinary, pcm[i:min(i+frameBytes, len(pcm))]); err != nil {
-			return err
-		}
-	}
-	sent.Store(true)
-	return conn.Write(ctx, websocket.MessageText, []byte(msgCloseStream))
 }
 
 type message struct {
@@ -455,13 +373,6 @@ func Place(utterances []string, dur float64) []stt.Segment {
 		at = end
 	}
 	return segs
-}
-
-func (c *Client) end(reason string, col *collector, pcmBytes int) stt.Result {
-	if c.Trace != nil {
-		c.Trace(reason, col.endpoints)
-	}
-	return c.result(col.done(), pcmBytes)
 }
 
 func (c *Client) result(utterances []string, pcmBytes int) stt.Result {
