@@ -194,7 +194,7 @@ func (c *Client) Transcribe(ctx context.Context, wav []byte, opts stt.Options) (
 		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
 		defer cancel()
 	}
-	st, err := c.open(outer, ctx, opts.Language, nil)
+	st, err := c.open(outer, ctx, opts.Language, EncodeKeyterms(opts.Keyterms), nil)
 	if err != nil {
 		return stt.Result{}, err
 	}
@@ -243,7 +243,7 @@ func (c *Client) streamError(outer, ctx context.Context, err error) error {
 
 // Ping opens one stream and closes it. It sends no audio.
 func (c *Client) Ping(ctx context.Context) error {
-	conn, err := c.dial(ctx, ctx, "")
+	conn, err := c.dial(ctx, ctx, "", "")
 	if err != nil {
 		return err
 	}
@@ -254,7 +254,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	return conn.Close(websocket.StatusNormalClosure, "")
 }
 
-func (c *Client) dial(ctx, outer context.Context, lang string) (*websocket.Conn, error) {
+func (c *Client) dial(ctx, outer context.Context, lang, keyterms string) (*websocket.Conn, error) {
 	tok, err := c.token()
 	if err != nil {
 		return nil, err
@@ -276,6 +276,9 @@ func (c *Client) dial(ctx, outer context.Context, lang string) (*websocket.Conn,
 	h.Set("User-Agent", c.UserAgent)
 	h.Set("x-app", "cli")
 	h.Set("anthropic-client-platform", "cli")
+	if keyterms != "" {
+		h.Set("x-config-keyterms", keyterms)
+	}
 	conn, resp, err := websocket.Dial(ctx, c.URL+"?"+q.Encode(), &websocket.DialOptions{HTTPClient: c.HTTP, HTTPHeader: h})
 	if err != nil {
 		return nil, dialError(outer, resp, err)

@@ -25,10 +25,23 @@ Download the static binary for Linux on x86-64:
 ```sh
 curl -fsSL -o ~/.local/bin/oat https://github.com/matheuscamposmt/oat/releases/latest/download/oat-linux-amd64
 chmod +x ~/.local/bin/oat
-oat setup         # registers the MCP server in Claude Code
+```
+
+Then install the Claude Code plugin. In Claude Code, run:
+
+```
+/plugin marketplace add matheuscamposmt/oat
+/plugin install oat@oat
+```
+
+The plugin gives Claude Code the oat MCP server and the `/oat:transcribe` and `/oat:keyterms` skills. It does not carry the binary, so `oat` must be on your PATH. Then test the setup and record:
+
+```sh
 oat doctor        # tests the audio, the Claude login, and the MCP server
 oat new "Weekly sync"
 ```
+
+Without the plugin, run `oat setup` instead. It registers the MCP server in Claude Code at user scope. Use one of the two, not both: with both, Claude Code runs the server twice. `oat doctor` warns about it, and `claude mcp remove --scope user oat` fixes it.
 
 Or build it from source with `make install` (see [Install](#install)).
 
@@ -60,6 +73,7 @@ Audio chunks go to the voice endpoint at api.anthropic.com (or to Groq, with `tr
 
 - Linux with PipeWire (and its Pulse layer) or PulseAudio
 - `parec` and `pactl`, from the `pulseaudio-utils` package
+- `ffmpeg`, for `oat transcribe` only
 - Go 1.25 or later to build. Go 1.24 downloads 1.25 on its own.
 - Claude Code, logged in with a claude.ai account. With `transcriber = "groq"`, a Groq API key instead.
 
@@ -92,7 +106,7 @@ make install
 oat doctor
 ```
 
-`make install` builds a static binary into `~/.local/bin/oat` and runs `oat setup`, which registers the MCP server in Claude Code at user scope. `oat doctor` checks the audio stack, the Claude login and the voice stream (or the Groq key), the MCP registration, and the data folder. It prints a fix under anything that fails.
+`make install` builds a static binary into `~/.local/bin/oat` and runs `oat setup`, which registers the MCP server in Claude Code at user scope. When the oat plugin is installed, `oat setup` registers nothing. In a terminal, it then offers the [scan of your projects](#scan-a-project) for key terms. `oat doctor` checks the audio stack, the Claude login and the voice stream (or the Groq key), the MCP server, `ffmpeg`, and the data folder. It prints a fix under anything that fails.
 
 `go install github.com/matheuscamposmt/oat/cmd/oat@latest` also works. Run `oat setup` yourself afterwards. With that install, `oat version` prints `dev`.
 
@@ -101,6 +115,7 @@ oat doctor
 ```sh
 oat new "Weekly sync"             # Portuguese by default
 oat new "Weekly sync" --lang en
+oat new "Sync CVM" --keyterms-set cvm   # a named list of key terms
 oat                               # the list of past meetings; press n to start one
 ```
 
@@ -119,6 +134,68 @@ The notes pane has the focus when the recording starts, so you can type right aw
 After you stop, oat finishes the last chunks and writes the summary. `enter` opens the meeting on its summary, and any other key goes back to the list. If you quit before the chunks are done, the next start of oat finishes them.
 
 In the list, `s` writes the summary of the selected meeting again. In a meeting, `s` switches between the summary and your notes, `y` copies the one on screen, and `r` writes the summary again.
+
+## Transcribe an audio file
+
+```sh
+oat transcribe "WhatsApp Ptt 2026-11-24 at 11.57.06.ogg"
+oat transcribe --keyterms "Entra ID,GST" --lang auto recording.m4a
+oat transcribe --keyterms-set cvm meeting.ogg
+```
+
+`oat transcribe` prints the text of an audio file, one paragraph per chunk. It needs `ffmpeg` (`sudo apt install ffmpeg`), which decodes any format it knows. oat cuts the audio at pauses, as in a meeting, and sends up to four chunks at the same time with Claude, two with Groq. Errors and retries go to stderr, and stdout gets the text only when every chunk worked.
+
+`--keyterms` lists names and acronyms, separated by commas, so that the backend spells them right. `--keyterms-set` adds a named list. See [Key terms](#key-terms).
+
+The flags `--transcriber`, `--lang`, and `--model` work as in `oat new`. The file does not become a meeting.
+
+In Claude Code, the plugin skill `/oat:transcribe` runs this command. It finds the file, builds the key terms from the conversation, and shows the text.
+
+## Key terms
+
+A speech model gets names and acronyms wrong: "raiz" for RAIS, "Enter ID" for Entra ID. Key terms tell the backend how to spell them. oat sends them with each meeting and each file. It takes them from these sources, in this order, until 50 terms or 1024 characters:
+
+1. The `--keyterms` flag of `oat new` or `oat transcribe`.
+2. A named list from `config.toml`.
+3. The words of the meeting title, split at spaces, `-_./`, and camelCase. Each word has 3 to 20 letters. A word with accents is left out.
+4. A base of coding terms: MCP, OAuth, webhook, worktree, subagent, JSON, TypeScript, localhost, regex, codebase, gRPC.
+
+oat drops a term that repeats, with case ignored. The terms of a meeting are fixed when the recording starts. oat saves them in `meta.json`, so the chunks sent later and the summary use the same terms.
+
+With the Claude backend, write the terms in ASCII. Claude Code removes accented letters before it sends them, so "Vinícius" becomes "Vincius". Write "Vinicius". With Groq, the terms go to the Whisper prompt, and accents are fine.
+
+### Named lists
+
+Keep one list for each project, so that the terms of one project stay out of the meetings of another:
+
+```toml
+[keyterms.cvm]
+folder = "/home/you/projects/cvm"
+terms = ["RAIS", "LabContas", "Entra ID"]
+```
+
+`oat new --keyterms-set cvm` uses the list `cvm`. Without the flag, `oat new` uses the first list whose name is in the title, with case and accents ignored, so "Sync CVM" uses `cvm`. With no match, the meeting has no list. `oat transcribe --keyterms-set cvm FILE` uses a list for a file.
+
+| Command | Action |
+|---|---|
+| `oat keyterms list` | Shows the lists |
+| `oat keyterms list NAME` | Shows the terms that the list sends and the source of each. It warns about accents and about terms past the limit |
+| `oat keyterms add NAME TERM...` | Adds terms at the top of a list, or creates the list |
+| `oat keyterms rm NAME TERM...` | Removes terms from a list |
+| `oat keyterms scan FOLDER [--name NAME]` | Proposes a list from the documents of a folder |
+| `oat keyterms scan --all` | Scans again each list that has a folder |
+
+A term with spaces needs quotes: `oat keyterms add cvm "Entra ID"`. `oat keyterms` changes only the lines of its list in `config.toml`, so your comments and other keys stay. A comment inside the list goes away when oat writes the list.
+
+### Scan a project
+
+`oat keyterms scan FOLDER` runs `claude -p` in the folder. Claude gets only the Read, Glob, and Grep tools, and `--restricted` keeps them inside the folder. It reads the files that describe the project (README, CLAUDE.md, AGENTS.md, docs, glossaries, and folder names), not the code. It proposes up to 50 proper names, acronyms, systems, and products, without accents. The documents go to Claude, the same as in a Claude Code session in that folder.
+
+oat shows the numbered list. Type the numbers of the terms to remove, then confirm. Nothing is saved without the confirmation. The list takes the name of the folder, unless you give `--name`, and keeps the folder path for `scan --all`. A scan of a list that exists keeps its terms and adds the new ones.
+
+`oat setup` offers the scan. It asks for your project folders, one per line, and scans each one. It asks only when it runs in a terminal.
+
+In Claude Code, `/oat:keyterms` scans the current project, or adds a term after a wrong transcription, such as "RAIS came out as raiz".
 
 ## Ask Claude about your meetings
 
@@ -156,7 +233,7 @@ keep_audio = false                 # keep the WAV chunks in audio/
 groq_api_key = ""                  # Groq only: used when GROQ_API_KEY is not set
 ```
 
-The flags `--transcriber`, `--no-live`, `--lang`, `--model`, `--echo`, and `--keep-audio` override the file.
+The flags `--transcriber`, `--no-live`, `--lang`, `--model`, `--echo`, and `--keep-audio` override the file. The file also holds the named lists of key terms, in `[keyterms.NAME]` tables. See [Key terms](#key-terms).
 
 ## Files
 
@@ -164,7 +241,7 @@ Each meeting is a folder in `~/.local/share/oat/meetings/`:
 
 | File | Content |
 |---|---|
-| `meta.json` | Title, start, end, language, model, status |
+| `meta.json` | Title, start, end, language, model, status, key terms |
 | `transcript.jsonl` | One raw segment per line |
 | `transcript.md` | The readable transcript |
 | `notes.md` | Your notes |

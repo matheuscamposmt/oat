@@ -30,7 +30,7 @@ type fakeStream struct {
 	ctx    context.Context
 }
 
-func (f *fakeLive) open(ctx context.Context, lang string, onText func(string)) (LiveStream, error) {
+func (f *fakeLive) open(ctx context.Context, lang string, keyterms []string, onText func(string)) (LiveStream, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.opened++

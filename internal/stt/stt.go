@@ -12,6 +12,7 @@ type Options struct {
 	Model    string
 	Language string
 	Prompt   string
+	Keyterms []string // names and acronyms that the backend should spell right
 }
 
 // Segment is one piece of the transcript. Times are seconds from the chunk start.

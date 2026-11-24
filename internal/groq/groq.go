@@ -67,8 +67,15 @@ func (c *Client) Transcribe(ctx context.Context, wav []byte, opts Options) (Resu
 	if opts.Language != "" && opts.Language != "auto" {
 		fields = append(fields, [2]string{"language", opts.Language})
 	}
-	if opts.Prompt != "" {
-		fields = append(fields, [2]string{"prompt", opts.Prompt})
+	prompt := opts.Prompt
+	if len(opts.Keyterms) > 0 {
+		prompt = strings.Join(opts.Keyterms, ", ") + "."
+		if opts.Prompt != "" {
+			prompt += " " + opts.Prompt
+		}
+	}
+	if prompt != "" {
+		fields = append(fields, [2]string{"prompt", prompt})
 	}
 	for _, f := range fields {
 		if err := w.WriteField(f[0], f[1]); err != nil {

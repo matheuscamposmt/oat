@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,6 +54,7 @@ type Meta struct {
 	Model     string    `json:"model"`
 	Echo      string    `json:"echo"`
 	Status    Status    `json:"status"`
+	Keyterms  []string  `json:"keyterms,omitempty"` // sent to the backend with each chunk
 }
 
 // Duration returns the length of the meeting. A meeting without an end uses now.
@@ -110,6 +112,11 @@ type Meeting struct {
 
 // DefaultTitle is the title of a meeting that has no title.
 func DefaultTitle(t time.Time) string { return "Meeting " + t.Format("15:04") }
+
+var defaultTitle = regexp.MustCompile(`^Meeting \d\d:\d\d$`)
+
+// IsDefaultTitle reports whether title is a DefaultTitle.
+func IsDefaultTitle(title string) bool { return defaultTitle.MatchString(title) }
 
 // Create makes a new meeting folder, takes its lock, and writes meta.json.
 func (s *Store) Create(title string, start time.Time, lang, model, echo string) (*Meeting, error) {

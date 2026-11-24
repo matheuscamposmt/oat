@@ -33,6 +33,7 @@ type Options struct {
 	Echo        *audio.Echo // nil turns echo cancel off
 	Open        func(ctx context.Context, device string) (Source, error)
 	Live        LiveFunc // nil turns the live transcript off
+	Keyterms    []string // for the live streams and the queue, saved in meta.json
 	Now         func() time.Time
 	PollEvery   time.Duration // 2 s
 	RenderEvery time.Duration // 10 s
@@ -114,6 +115,9 @@ func Start(ctx context.Context, o Options) (*Session, error) {
 	start := o.Now()
 	m, err := o.Store.Create(o.Title, start, o.Config.Lang, o.Config.MeetingModel(), o.Config.Echo)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.Update(func(mm *store.Meta) { mm.Keyterms = o.Keyterms }); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)

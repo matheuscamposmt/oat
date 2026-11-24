@@ -39,32 +39,34 @@ func Claude(bin string) Runner {
 	return func(ctx context.Context, prompt string) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, Timeout)
 		defer cancel()
-		base := []string{"-p", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--output-format", "text"}
-		out, msg, err := runClaude(ctx, bin, append([]string{"--safe-mode"}, base...), prompt)
-		if err != nil && strings.Contains(msg, "unknown option") {
-			out, msg, err = runClaude(ctx, bin, base, prompt)
+		base := []string{"--tools", "", "--strict-mcp-config", "--no-session-persistence", "--output-format", "text"}
+		out, err := Print(ctx, bin, "", append([]string{"--safe-mode"}, base...), prompt)
+		if err != nil && strings.Contains(err.Error(), "unknown option") {
+			out, err = Print(ctx, bin, "", base, prompt)
 		}
-		if err != nil {
-			if r := []rune(msg); len(r) > 300 {
-				msg = string(r[:300])
-			}
-			return "", fmt.Errorf("claude -p failed: %v: %s", err, msg)
-		}
-		return out, nil
+		return out, err
 	}
 }
 
-func runClaude(ctx context.Context, bin string, args []string, prompt string) (out, msg string, err error) {
-	cmd := exec.CommandContext(ctx, bin, args...)
+// Print runs claude -p with args in the folder dir, or in the current folder
+// when dir is empty, sends the prompt on stdin, and returns the answer.
+func Print(ctx context.Context, bin, dir string, args []string, prompt string) (string, error) {
+	cmd := exec.CommandContext(ctx, bin, append([]string{"-p"}, args...)...)
+	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(prompt)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err = cmd.Run()
-	msg = strings.TrimSpace(stderr.String())
-	if msg == "" {
-		msg = strings.TrimSpace(stdout.String())
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
+		}
+		if r := []rune(msg); len(r) > 300 {
+			msg = string(r[:300])
+		}
+		return "", fmt.Errorf("claude -p failed: %v: %s", err, msg)
 	}
-	return stdout.String(), msg, err
+	return stdout.String(), nil
 }
 
 // Prompt returns the instructions and the data for the notes of a meeting.
@@ -99,7 +101,11 @@ The user marked moments with "` + Mark + ` HH:MM:SS" lines in the notes. For eac
 The notes of the user, expanded with facts from the transcript. Keep the words and the order of the user.
 
 `)
-	fmt.Fprintf(&b, "Meeting: %s, %s, %s long.\n\n", meta.Title, meta.StartedAt.Format("2006-01-02 15:04"), store.Clock(meta.Duration(time.Now()).Seconds()))
+	fmt.Fprintf(&b, "Meeting: %s, %s, %s long.\n", meta.Title, meta.StartedAt.Format("2006-01-02 15:04"), store.Clock(meta.Duration(time.Now()).Seconds()))
+	if len(meta.Keyterms) > 0 {
+		b.WriteString("Key terms of the meeting, as they are spelled: " + strings.Join(meta.Keyterms, ", ") + ". The transcript can spell them wrong.\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("<notes>\n" + strings.TrimSpace(notes) + "\n</notes>\n\n<transcript>\n")
 	for _, l := range store.TranscriptLines(store.Clean(segs), false) {
 		b.WriteString(l + "\n")
@@ -119,8 +125,6 @@ func Parse(answer string) (title, md string) {
 	}
 	return title, answer
 }
-
-var defaultTitle = regexp.MustCompile(`^Meeting \d\d:\d\d$`)
 
 // Write asks the runner for the notes of a meeting and saves them as
 // summary.md. When the meeting has the default title, it takes the title of
@@ -157,7 +161,7 @@ func Write(ctx context.Context, m *store.Meeting, run Runner) (string, error) {
 	if err := m.Reload(); err != nil {
 		return "", err
 	}
-	if cur := m.Snapshot().Title; title == "" || !defaultTitle.MatchString(cur) {
+	if cur := m.Snapshot().Title; title == "" || !store.IsDefaultTitle(cur) {
 		return cur, nil
 	}
 	if err := m.Update(func(mm *store.Meta) { mm.Title = title }); err != nil {

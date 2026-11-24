@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -18,12 +19,14 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/matheuscamposmt/oat/internal/audio"
 	"github.com/matheuscamposmt/oat/internal/claudestt"
 	"github.com/matheuscamposmt/oat/internal/config"
 	"github.com/matheuscamposmt/oat/internal/doctor"
 	"github.com/matheuscamposmt/oat/internal/groq"
+	"github.com/matheuscamposmt/oat/internal/keyterms"
 	"github.com/matheuscamposmt/oat/internal/mcpserver"
 	"github.com/matheuscamposmt/oat/internal/session"
 	"github.com/matheuscamposmt/oat/internal/store"
@@ -37,21 +40,39 @@ var version = "dev"
 const usage = `oat records meetings from the terminal and transcribes them.
 
 Usage:
-  oat                  open the list of meetings
-  oat new [title]      start a recording now
-  oat summary [id]     write summary.md with Claude Code (default: the latest meeting)
-  oat mcp              run the MCP server (Claude Code starts it)
-  oat doctor           test the environment
-  oat setup            register the MCP server in Claude Code
-  oat version          print the version
+  oat                       open the list of meetings
+  oat new [title]           start a recording now
+  oat summary [id]          write summary.md with Claude Code (default: the latest meeting)
+  oat transcribe FILE       print the text of an audio file
+  oat keyterms list [NAME]  show the key term lists, or the terms that one list sends
+  oat keyterms add NAME TERM...
+                            add terms to a list, or create it
+  oat keyterms rm NAME TERM...
+                            remove terms from a list
+  oat keyterms scan FOLDER [--name NAME]
+                            propose a list from the documents of a folder, with Claude Code
+  oat keyterms scan --all   scan again each list that has a folder
+  oat mcp                   run the MCP server (Claude Code starts it)
+  oat doctor                test the environment
+  oat setup                 register the MCP server in Claude Code and offer the scan
+  oat version               print the version
 
 Flags for oat and oat new:
-  --transcriber S  claude (the Claude Code voice stream) or groq
-  --no-live        claude only: send each chunk after its pause, not while people speak
-  --lang CODE      language of the meeting: pt, en, or auto
-  --model NAME     Groq only: whisper-large-v3-turbo or whisper-large-v3
-  --echo MODE      echo cancel: auto, on, or off
-  --keep-audio     keep the WAV chunks in the meeting folder
+  --transcriber S      claude (the Claude Code voice stream) or groq
+  --no-live            claude only: send each chunk after its pause, not while people speak
+  --lang CODE          language of the meeting: pt, en, or auto
+  --model NAME         Groq only: whisper-large-v3-turbo or whisper-large-v3
+  --echo MODE          echo cancel: auto, on, or off
+  --keep-audio         keep the WAV chunks in the meeting folder
+  --keyterms LIST      names and acronyms, separated by commas
+  --keyterms-set NAME  the key term list (default: the first list whose name is in the title)
+
+Flags for oat transcribe:
+  --transcriber S      claude or groq
+  --lang CODE          pt, en, or auto
+  --model NAME         Groq only
+  --keyterms LIST      names and acronyms, separated by commas
+  --keyterms-set NAME  the key term list
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -68,6 +89,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runMCP(stderr)
 	case "summary":
 		return runSummary(args, stdout, stderr)
+	case "transcribe":
+		return runTranscribe(args, stdout, stderr)
+	case "keyterms":
+		return runKeyterms(args, stdout, stderr)
 	case "doctor":
 		return runDoctor(stdout, stderr)
 	case "setup":
@@ -99,6 +124,8 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	fs.StringVar(&o.Model, "model", "", "")
 	fs.StringVar(&o.Echo, "echo", "", "")
 	fs.BoolVar(&o.KeepAudio, "keep-audio", false, "")
+	flagTerms := fs.String("keyterms", "", "")
+	set := fs.String("keyterms-set", "", "")
 	words, err := parseInterspersed(fs, args)
 	if err != nil {
 		return 2
@@ -115,14 +142,21 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	if err := cfg.Validate(); err != nil {
 		return fail(stderr, err)
 	}
+	lists, err := keyterms.Load(paths.Config)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	if _, err := keyterms.Pick(lists, *set, ""); err != nil {
+		return fail(stderr, err)
+	}
 	client, claude, err := newClient(cfg, paths)
 	if err != nil {
 		return fail(stderr, err)
 	}
 	var live session.LiveFunc
 	if claude != nil && cfg.Live {
-		live = func(ctx context.Context, lang string, onText func(string)) (session.LiveStream, error) {
-			st, err := claude.Open(ctx, lang, onText)
+		live = func(ctx context.Context, lang string, keyterms []string, onText func(string)) (session.LiveStream, error) {
+			st, err := claude.Open(ctx, lang, keyterms, onText)
 			if err != nil {
 				return nil, err // not a typed nil in the interface
 			}
@@ -159,7 +193,11 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 			if err := liveErr(); err != nil {
 				return nil, err
 			}
-			s, err := session.Start(ctx, session.Options{Title: title, Config: cfg, Store: st, Client: client, Live: live, Pactl: pactl, Echo: echo})
+			terms, err := keytermsFor(lists, *flagTerms, *set, title)
+			if err != nil {
+				return nil, err
+			}
+			s, err := session.Start(ctx, session.Options{Title: title, Config: cfg, Store: st, Client: client, Live: live, Pactl: pactl, Echo: echo, Keyterms: terms})
 			if err != nil {
 				return nil, err
 			}
@@ -281,6 +319,20 @@ func newClient(cfg config.Config, paths config.Paths) (transcribe.Client, *claud
 	return c, c, nil
 }
 
+// keytermsFor returns the key terms of a recording. set names the list; without
+// it, the title picks one. A default title gives no words.
+func keytermsFor(lists []keyterms.List, flag, set, title string) ([]string, error) {
+	if store.IsDefaultTitle(title) {
+		title = ""
+	}
+	list, err := keyterms.Pick(lists, set, title)
+	if err != nil {
+		return nil, err
+	}
+	kept, _ := keyterms.Merge(strings.Split(flag, ","), list, title)
+	return keyterms.Texts(kept), nil
+}
+
 // parseInterspersed parses flags before and after the title words. The flag
 // package alone stops at the first word that is not a flag.
 func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -354,9 +406,10 @@ func runDoctor(stdout, stderr io.Writer) int {
 			}
 			return claudestt.New(path, "oat/"+version).Ping(ctx)
 		},
-		MCPStatus: func(ctx context.Context) error {
+		MCPStatus: func(ctx context.Context) (doctor.MCPState, error) {
 			return doctor.MCPStatus(ctx, audio.Exec, exec.LookPath)
 		},
+		FFmpeg:  func() (string, error) { return exec.LookPath(ffmpegPath) },
 		DataDir: paths.Data,
 		Echo:    &audio.Echo{Pactl: pactl, StatePath: paths.EchoState()},
 	})
@@ -377,5 +430,16 @@ func runSetup(stdout, stderr io.Writer) int {
 	if err := doctor.Setup(context.Background(), audio.Exec, exec.LookPath, bin, stdout); err != nil {
 		return fail(stderr, err)
 	}
+	// Without a terminal, for example in make install from a script, oat asks nothing.
+	if !term.IsTerminal(os.Stdin.Fd()) {
+		return 0
+	}
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	offerScan(ctx, bufio.NewReader(os.Stdin), stdout, paths.Config)
 	return 0
 }

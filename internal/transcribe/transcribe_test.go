@@ -302,3 +302,19 @@ func TestBackoff(t *testing.T) {
 		}
 	}
 }
+
+func TestKeytermsComeFromTheMeeting(t *testing.T) {
+	m := newMeeting(t)
+	if err := m.Update(func(mm *store.Meta) { mm.Keyterms = []string{"RAIS", "Entra ID"} }); err != nil {
+		t.Fatal(err)
+	}
+	m.AppendSegments([]store.Segment{{Start: 0, End: 1, Speaker: store.Me, Text: "a b c"}})
+	writeChunk(t, m, store.Me, 1)
+	fc := &fakeClient{replies: []reply{ok()}}
+	if err := run(t, New(m, fc, Config{Model: "m"}, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if got := fc.calls[0]; strings.Join(got.Keyterms, ",") != "RAIS,Entra ID" || got.Prompt != "a b c" {
+		t.Fatalf("options %+v", got)
+	}
+}

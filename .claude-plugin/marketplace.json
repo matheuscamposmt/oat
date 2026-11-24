@@ -1,0 +1,13 @@
+{
+  "name": "oat",
+  "owner": {
+    "name": "matheuscamposmt"
+  },
+  "plugins": [
+    {
+      "name": "oat",
+      "source": "./plugin",
+      "description": "Meeting notes and audio transcription with the Claude Code voice stream"
+    }
+  ]
+}

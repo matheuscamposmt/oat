@@ -20,6 +20,8 @@ type Result struct {
 	OK     bool
 	Detail string
 	Fix    string
+	// Optional marks a test whose failure does not fail doctor.
+	Optional bool
 }
 
 // Deps holds the functions that the tests call. Tests replace them.
@@ -39,7 +41,8 @@ type Deps struct {
 	ExpiryMargin time.Duration
 	// AutoSummary is on when oat writes a summary after each meeting with claude -p.
 	AutoSummary bool
-	MCPStatus   func(ctx context.Context) error // nil when Claude Code knows the oat server
+	MCPStatus   func(ctx context.Context) (MCPState, error)
+	FFmpeg      func() (string, error) // the path of ffmpeg, which only oat transcribe needs
 	DataDir     string
 	Echo        *audio.Echo
 }
@@ -93,11 +96,13 @@ func Run(ctx context.Context, d Deps) []Result {
 		}
 	}
 
-	if err := d.MCPStatus(ctx); err != nil {
-		add(Result{Name: "MCP server", Detail: err.Error(), Fix: "Run: oat setup"})
+	if p, err := d.FFmpeg(); err != nil {
+		add(Result{Name: "ffmpeg", Optional: true, Detail: "not found", Fix: "Install ffmpeg to use oat transcribe: sudo apt install ffmpeg"})
 	} else {
-		add(Result{Name: "MCP server", OK: true, Detail: "registered in Claude Code as oat"})
+		add(Result{Name: "ffmpeg", OK: true, Detail: p})
 	}
+
+	add(mcpResult(d.MCPStatus(ctx)))
 
 	if err := writable(d.DataDir); err != nil {
 		add(Result{Name: "Data folder", Detail: err.Error(), Fix: "Make sure that you can write to " + d.DataDir})
@@ -114,6 +119,21 @@ func Run(ctx context.Context, d Deps) []Result {
 		add(Result{Name: "Echo cancel", OK: true, Detail: "no module left behind"})
 	}
 	return rs
+}
+
+func mcpResult(st MCPState, err error) Result {
+	const fix = "Install the oat plugin, or run: oat setup"
+	switch {
+	case err != nil:
+		return Result{Name: "MCP server", Detail: err.Error(), Fix: fix}
+	case st.User && st.Plugin:
+		return Result{Name: "MCP server", Detail: "registered twice: by oat setup and by the oat plugin", Fix: "claude mcp remove --scope user oat"}
+	case st.Plugin:
+		return Result{Name: "MCP server", OK: true, Detail: "provided by the oat plugin"}
+	case st.User:
+		return Result{Name: "MCP server", OK: true, Detail: "registered in Claude Code as oat"}
+	}
+	return Result{Name: "MCP server", Detail: "Claude Code does not know the oat server", Fix: fix}
 }
 
 func groqChecks(ctx context.Context, d Deps) []Result {
@@ -151,12 +171,15 @@ func claudeChecks(ctx context.Context, d Deps) []Result {
 	return append(rs, Result{Name: "Claude voice", OK: true, Detail: "the voice stream accepts the token"})
 }
 
-// Print writes the results and returns true when all tests passed.
+// Print writes the results and returns true when all tests that are not optional passed.
 func Print(w io.Writer, rs []Result) bool {
 	ok := true
 	for _, r := range rs {
 		mark := "✓"
-		if !r.OK {
+		switch {
+		case !r.OK && r.Optional:
+			mark = "!"
+		case !r.OK:
 			mark, ok = "✗", false
 		}
 		fmt.Fprintf(w, "%s %-16s %s\n", mark, r.Name, r.Detail)
