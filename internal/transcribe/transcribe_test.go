@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/matheuscamposmt/oat/internal/chunk"
 	"github.com/matheuscamposmt/oat/internal/groq"
 	"github.com/matheuscamposmt/oat/internal/store"
+	"github.com/matheuscamposmt/oat/internal/stt"
 )
 
 type reply func(opts groq.Options) (groq.Result, error)
@@ -192,6 +194,25 @@ func TestAuthErrorStopsAndKeepsChunks(t *testing.T) {
 	}
 	if !rec.has(func(ev any) bool { w, ok := ev.(Warning); return ok && w.Fatal }) {
 		t.Fatal("no fatal warning")
+	}
+}
+
+func TestWarningsNameTheBackend(t *testing.T) {
+	m := newMeeting(t)
+	writeChunk(t, m, store.Me, 1)
+	rec := &recorder{}
+	p := New(m, &fakeClient{replies: []reply{fails(&stt.AuthError{Service: "claude", Msg: "HTTP 401"})}}, Config{Backend: ClaudeBackend}, rec.emit)
+	if err := run(t, p); !errors.Is(err, ErrAuth) {
+		t.Fatalf("Wait = %v, want ErrAuth", err)
+	}
+	if !rec.has(func(ev any) bool {
+		w, ok := ev.(Warning)
+		return ok && w.Fatal && strings.HasPrefix(w.Msg, "Claude rejected the login.") && strings.Contains(w.Msg, "Open Claude Code")
+	}) {
+		t.Fatal("no fatal warning that names Claude")
+	}
+	if BackendFor("claude") != ClaudeBackend || BackendFor("groq") != GroqBackend || BackendFor("") != GroqBackend {
+		t.Fatal("BackendFor picked the wrong backend")
 	}
 }
 

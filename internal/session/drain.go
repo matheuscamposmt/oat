@@ -43,12 +43,12 @@ func drainOne(ctx context.Context, m *store.Meeting, client transcribe.Client, c
 	defer m.Unlock()
 	meta := m.Snapshot()
 	_ = m.Update(func(mm *store.Meta) { mm.Status = store.Processing })
-	pipe := transcribe.New(m, client, transcribe.Config{Model: meta.Model, KeepAudio: cfg.KeepAudio}, func(ev any) {
+	pipe := transcribe.New(m, client, transcribe.Config{Model: cfg.GroqModel(meta.Model), KeepAudio: cfg.KeepAudio, Backend: transcribe.BackendFor(cfg.Transcriber)}, func(ev any) {
 		switch e := ev.(type) {
 		case transcribe.QueueEvent:
 			emit(DrainEvent{ID: meta.ID, Pending: e.Pending})
 		case transcribe.Warning:
-			if e.Fatal { // for example, Groq rejected the key
+			if e.Fatal { // for example, the backend rejected the credentials
 				emit(e)
 			}
 		}

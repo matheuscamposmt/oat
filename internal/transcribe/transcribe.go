@@ -1,4 +1,4 @@
-// Package transcribe sends chunk files to Groq and saves the segments.
+// Package transcribe sends chunk files to a speech-to-text backend and saves the segments.
 package transcribe
 
 import (
@@ -13,13 +13,34 @@ import (
 	"time"
 
 	"github.com/matheuscamposmt/oat/internal/chunk"
-	"github.com/matheuscamposmt/oat/internal/groq"
 	"github.com/matheuscamposmt/oat/internal/store"
+	"github.com/matheuscamposmt/oat/internal/stt"
 )
 
-// Client is the part of the Groq client that the pipeline uses.
+// Client is the part of a backend client that the pipeline uses.
 type Client interface {
-	Transcribe(ctx context.Context, wav []byte, opts groq.Options) (groq.Result, error)
+	Transcribe(ctx context.Context, wav []byte, opts stt.Options) (stt.Result, error)
+}
+
+// Backend names a speech-to-text service in the warnings.
+type Backend struct {
+	Name       string // Groq
+	Credential string // API key
+	AuthFix    string // what the user does after an auth failure
+}
+
+// The backends that oat knows.
+var (
+	GroqBackend   = Backend{Name: "Groq", Credential: "API key", AuthFix: "Fix the key and start oat again."}
+	ClaudeBackend = Backend{Name: "Claude", Credential: "login", AuthFix: "Open Claude Code to log in again, then start oat again."}
+)
+
+// BackendFor returns the backend for a transcriber value of the configuration.
+func BackendFor(transcriber string) Backend {
+	if transcriber == "claude" {
+		return ClaudeBackend
+	}
+	return GroqBackend
 }
 
 // SegmentsEvent carries the new segments of one chunk.
@@ -34,15 +55,16 @@ type Warning struct {
 	Msg   string
 }
 
-// ErrAuth means that Groq rejected the key. The chunks stay on disk.
-var ErrAuth = errors.New("groq rejected the API key")
+// ErrAuth means that the backend rejected the credentials. The chunks stay on disk.
+var ErrAuth = errors.New("the transcription service rejected the credentials")
 
 // Config changes how the pipeline sends chunks.
 type Config struct {
 	Model     string
 	Lang      func() string // the current language; nil uses the language in meta.json
 	KeepAudio bool
-	Workers   int // 2 when zero
+	Workers   int     // 2 when zero
+	Backend   Backend // GroqBackend when zero
 }
 
 const (
@@ -52,7 +74,7 @@ const (
 	maxCompression = 2.4
 )
 
-// Pipeline sends the chunk files of one meeting to Groq with a pool of workers.
+// Pipeline sends the chunk files of one meeting to the backend with a pool of workers.
 type Pipeline struct {
 	m      *store.Meeting
 	client Client
@@ -77,6 +99,9 @@ type Pipeline struct {
 func New(m *store.Meeting, client Client, cfg Config, emit func(any)) *Pipeline {
 	if cfg.Workers <= 0 {
 		cfg.Workers = 2
+	}
+	if cfg.Backend.Name == "" {
+		cfg.Backend = GroqBackend
 	}
 	if cfg.Lang == nil {
 		lang := m.Snapshot().Lang
@@ -167,7 +192,8 @@ func (p *Pipeline) work(ctx context.Context) {
 				p.authErr = ErrAuth
 				p.mu.Unlock()
 				if !p.stopped.Swap(true) {
-					p.emit(Warning{Fatal: true, Msg: "Groq rejected the API key. The chunks stay on disk. Fix the key and start oat again."})
+					b := p.cfg.Backend
+					p.emit(Warning{Fatal: true, Msg: fmt.Sprintf("%s rejected the %s. The chunks stay on disk. %s", b.Name, b.Credential, b.AuthFix)})
 				}
 				p.cancel()
 				return
@@ -196,11 +222,11 @@ func (p *Pipeline) process(ctx context.Context, path string) error {
 	}
 	tries := 0
 	for {
-		opts := groq.Options{Model: p.cfg.Model, Language: p.cfg.Lang(), Prompt: p.promptFor(speaker)}
+		opts := stt.Options{Model: p.cfg.Model, Language: p.cfg.Lang(), Prompt: p.promptFor(speaker)}
 		res, err := p.client.Transcribe(ctx, wav, opts)
-		var rl *groq.RateLimitError
-		var auth *groq.AuthError
-		var req *groq.RequestError
+		var rl *stt.RateLimitError
+		var auth *stt.AuthError
+		var req *stt.RequestError
 		switch {
 		case err == nil:
 			return p.save(path, speaker, start, chunk.WAVDuration(wav), res)
@@ -211,14 +237,14 @@ func (p *Pipeline) process(ctx context.Context, path string) error {
 		case ctx.Err() != nil:
 			return ctx.Err()
 		case errors.As(err, &rl):
-			p.emit(Warning{Msg: fmt.Sprintf("Groq rate limit. Next try in %s.", rl.RetryAfter.Round(time.Second))})
+			p.emit(Warning{Msg: fmt.Sprintf("%s rate limit. Next try in %s.", p.cfg.Backend.Name, rl.RetryAfter.Round(time.Second))})
 			if err := p.sleep(ctx, rl.RetryAfter); err != nil {
 				return err
 			}
 		default:
 			d := backoff(tries)
 			tries++
-			p.emit(Warning{Msg: fmt.Sprintf("Groq did not answer (%v). Next try in %s.", err, d)})
+			p.emit(Warning{Msg: fmt.Sprintf("%s did not answer (%v). Next try in %s.", p.cfg.Backend.Name, err, d)})
 			if err := p.sleep(ctx, d); err != nil {
 				return err
 			}
@@ -227,7 +253,7 @@ func (p *Pipeline) process(ctx context.Context, path string) error {
 }
 
 // save writes the segments of a chunk, then deletes or keeps the WAV file.
-func (p *Pipeline) save(path string, speaker store.Speaker, start, dur float64, res groq.Result) error {
+func (p *Pipeline) save(path string, speaker store.Speaker, start, dur float64, res stt.Result) error {
 	segs := Segments(res, speaker, start, dur)
 	if err := p.m.AppendSegments(segs); err != nil {
 		p.emit(Warning{Fatal: true, Msg: "Could not write the transcript: " + err.Error()})
@@ -251,12 +277,12 @@ func (p *Pipeline) save(path string, speaker store.Speaker, start, dur float64, 
 	return nil
 }
 
-// fail moves a chunk that Groq refused to failed/ and emits a warning.
+// fail moves a chunk that the backend refused to failed/ and emits a warning.
 func (p *Pipeline) fail(path, msg string) error {
 	if err := os.MkdirAll(p.m.FailedDir(), 0o755); err == nil {
 		_ = os.Rename(path, filepath.Join(p.m.FailedDir(), filepath.Base(path)))
 	}
-	p.emit(Warning{Msg: fmt.Sprintf("Groq refused %s: %s. The file is in failed/.", filepath.Base(path), msg)})
+	p.emit(Warning{Msg: fmt.Sprintf("%s refused %s: %s. The file is in failed/.", p.cfg.Backend.Name, filepath.Base(path), msg)})
 	return nil
 }
 
@@ -266,9 +292,9 @@ func (p *Pipeline) promptFor(sp store.Speaker) string {
 	return p.tails[sp]
 }
 
-// Segments converts a Groq result to segments on the meeting clock. It drops
+// Segments converts a backend result to segments on the meeting clock. It drops
 // segments that look like silence, a repetition loop, or a Whisper hallucination.
-func Segments(res groq.Result, speaker store.Speaker, start, dur float64) []store.Segment {
+func Segments(res stt.Result, speaker store.Speaker, start, dur float64) []store.Segment {
 	var out []store.Segment
 	if len(res.Segments) == 0 {
 		if t := strings.TrimSpace(res.Text); t != "" && !Hallucination(t) {

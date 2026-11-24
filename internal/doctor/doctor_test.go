@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matheuscamposmt/oat/internal/audio"
 )
@@ -26,13 +27,14 @@ func fakePactl(ctx context.Context, name string, args ...string) (string, error)
 func deps(t *testing.T) Deps {
 	pactl := audio.Pactl{Run: fakePactl}
 	return Deps{
-		LookPath:  func(s string) (string, error) { return "/usr/bin/" + s, nil },
-		Pactl:     pactl,
-		GroqKey:   func() (string, string, error) { return "gsk_abcdefgh1234", "/home/u/.config/oat/config.toml", nil },
-		Ping:      func(ctx context.Context, key string) error { return nil },
-		MCPStatus: func(ctx context.Context) error { return nil },
-		DataDir:   filepath.Join(t.TempDir(), "oat"),
-		Echo:      &audio.Echo{Pactl: pactl, StatePath: filepath.Join(t.TempDir(), "echo.json")},
+		LookPath:    func(s string) (string, error) { return "/usr/bin/" + s, nil },
+		Pactl:       pactl,
+		Transcriber: "groq",
+		GroqKey:     func() (string, string, error) { return "gsk_abcdefgh1234", "/home/u/.config/oat/config.toml", nil },
+		Ping:        func(ctx context.Context, key string) error { return nil },
+		MCPStatus:   func(ctx context.Context) error { return nil },
+		DataDir:     filepath.Join(t.TempDir(), "oat"),
+		Echo:        &audio.Echo{Pactl: pactl, StatePath: filepath.Join(t.TempDir(), "echo.json")},
 	}
 }
 
@@ -138,5 +140,91 @@ func TestSetupWithoutClaude(t *testing.T) {
 	Setup(context.Background(), r.run, func(string) (string, error) { return "", errors.New("not found") }, "/bin/oat", &buf)
 	if len(r.calls) != 0 || !strings.Contains(buf.String(), "claude mcp add --scope user oat -- /bin/oat mcp") {
 		t.Fatalf("calls %v, out %q", r.calls, buf.String())
+	}
+}
+
+func claudeDeps(t *testing.T) Deps {
+	d := deps(t)
+	d.Transcriber = "claude"
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	d.Now = func() time.Time { return now }
+	d.ClaudeLogin = func() (time.Time, string, error) {
+		return now.Add(5 * time.Hour), "/home/u/.claude/.credentials.json", nil
+	}
+	d.ClaudePing = func(ctx context.Context) error { return nil }
+	d.GroqKey = func() (string, string, error) {
+		t.Fatal("read the Groq key with transcriber = claude")
+		return "", "", nil
+	}
+	return d
+}
+
+func TestClaudeAllPass(t *testing.T) {
+	rs := byName(Run(context.Background(), claudeDeps(t)))
+	if r := rs["Claude login"]; !r.OK || !strings.Contains(r.Detail, "5h0m0s") {
+		t.Fatalf("Claude login %+v", r)
+	}
+	if !rs["Claude voice"].OK {
+		t.Fatalf("Claude voice %+v", rs["Claude voice"])
+	}
+	if _, ok := rs["Groq key"]; ok {
+		t.Fatal("tested Groq with transcriber = claude")
+	}
+}
+
+func TestClaudeExpiredSkipsPing(t *testing.T) {
+	d := claudeDeps(t)
+	d.ClaudeLogin = func() (time.Time, string, error) { return d.Now().Add(-time.Minute), "f", nil }
+	d.ClaudePing = func(ctx context.Context) error { t.Fatal("pinged with an expired token"); return nil }
+	rs := byName(Run(context.Background(), d))
+	if r := rs["Claude login"]; r.OK || !strings.Contains(r.Fix, "Open Claude Code") {
+		t.Fatalf("Claude login %+v", r)
+	}
+}
+
+func TestClaudePingFailureNamesTheFallback(t *testing.T) {
+	d := claudeDeps(t)
+	d.ClaudePing = func(ctx context.Context) error { return errors.New("claude rejected the credentials: HTTP 401") }
+	rs := byName(Run(context.Background(), d))
+	if r := rs["Claude voice"]; r.OK || !strings.Contains(r.Fix, `transcriber = "groq"`) {
+		t.Fatalf("Claude voice %+v", r)
+	}
+}
+
+func TestClaudeNoLogin(t *testing.T) {
+	d := claudeDeps(t)
+	d.ClaudeLogin = func() (time.Time, string, error) { return time.Time{}, "", errors.New("no Claude Code login found") }
+	rs := byName(Run(context.Background(), d))
+	if r := rs["Claude login"]; r.OK || !strings.Contains(r.Fix, "log in") {
+		t.Fatalf("Claude login %+v", r)
+	}
+	if _, ok := rs["Claude voice"]; ok {
+		t.Fatal("pinged without a login")
+	}
+}
+
+func TestConfigErrorHasItsOwnResult(t *testing.T) {
+	d := claudeDeps(t)
+	d.ConfigPath = "/home/u/.config/oat/config.toml"
+	d.ConfigErr = errors.New(`transcriber must be claude or groq, not "Claude"`)
+	rs := byName(Run(context.Background(), d))
+	if r := rs["Configuration"]; r.OK || !strings.Contains(r.Fix, "config.toml") {
+		t.Fatalf("Configuration %+v", r)
+	}
+	if !rs["Claude login"].OK {
+		t.Fatal("the configuration error showed up as a login error")
+	}
+}
+
+func TestClaudeTokenInsideTheMargin(t *testing.T) {
+	d := claudeDeps(t)
+	d.ExpiryMargin = 30 * time.Second
+	d.ClaudeLogin = func() (time.Time, string, error) { return d.Now().Add(20 * time.Second), "f", nil }
+	d.ClaudePing = func(ctx context.Context) error {
+		t.Fatal("pinged with a token that the client does not use")
+		return nil
+	}
+	if r := byName(Run(context.Background(), d))["Claude login"]; r.OK {
+		t.Fatalf("Claude login %+v", r)
 	}
 }

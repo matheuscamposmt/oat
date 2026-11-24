@@ -26,7 +26,7 @@ func TestLoadFileOverridesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{Lang: "en", Model: "whisper-large-v3-turbo", Echo: "auto", KeepAudio: true}
+	want := Config{Transcriber: "claude", Lang: "en", Model: "whisper-large-v3-turbo", Echo: "auto", KeepAudio: true}
 	if cfg != want {
 		t.Fatalf("got %+v, want %+v", cfg, want)
 	}
@@ -44,9 +44,38 @@ func TestLoadBadFile(t *testing.T) {
 
 func TestApplyFlags(t *testing.T) {
 	got := Default().Apply(Overrides{Lang: "en", Echo: "off"})
-	want := Config{Lang: "en", Model: "whisper-large-v3-turbo", Echo: "off"}
+	want := Config{Transcriber: "claude", Lang: "en", Model: "whisper-large-v3-turbo", Echo: "off"}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	if got := Default().Apply(Overrides{Transcriber: "groq"}); got.Transcriber != "groq" {
+		t.Fatalf("the transcriber flag was not applied: %+v", got)
+	}
+}
+
+func TestTranscriberFromFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("transcriber = \"groq\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.Transcriber != "groq" {
+		t.Fatalf("got %+v %v", cfg, err)
+	}
+}
+
+func TestMeetingModel(t *testing.T) {
+	c := Default()
+	if c.MeetingModel() != ClaudeModel {
+		t.Fatalf("claude: got %q", c.MeetingModel())
+	}
+	c.Transcriber = "groq"
+	if c.MeetingModel() != "whisper-large-v3-turbo" {
+		t.Fatalf("groq: got %q", c.MeetingModel())
+	}
+	// A meeting recorded with Claude and drained with Groq uses the configured model.
+	if c.GroqModel(ClaudeModel) != "whisper-large-v3-turbo" || c.GroqModel("whisper-large-v3") != "whisper-large-v3" {
+		t.Fatal("GroqModel picked the wrong model")
 	}
 }
 
@@ -56,6 +85,11 @@ func TestValidate(t *testing.T) {
 	}
 	if err := (Config{Lang: "pt", Model: "m", Echo: "maybe"}).Validate(); err == nil {
 		t.Fatal("want an error for echo = maybe")
+	}
+	c := Default()
+	c.Transcriber = "openai"
+	if err := c.Validate(); err == nil {
+		t.Fatal("want an error for transcriber = openai")
 	}
 }
 

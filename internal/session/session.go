@@ -109,7 +109,7 @@ func Start(ctx context.Context, o Options) (*Session, error) {
 		return nil, fmt.Errorf("find the default microphone: %w", err)
 	}
 	start := o.Now()
-	m, err := o.Store.Create(o.Title, start, o.Config.Lang, o.Config.Model, o.Config.Echo)
+	m, err := o.Store.Create(o.Title, start, o.Config.Lang, o.Config.MeetingModel(), o.Config.Echo)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func Start(ctx context.Context, o Options) (*Session, error) {
 	s.mu.Unlock()
 	s.emit(devices)
 
-	s.pipe = transcribe.New(m, o.Client, transcribe.Config{Model: o.Config.Model, Lang: s.Lang, KeepAudio: o.Config.KeepAudio}, s.emit)
+	s.pipe = transcribe.New(m, o.Client, transcribe.Config{Model: o.Config.Model, Lang: s.Lang, KeepAudio: o.Config.KeepAudio, Backend: transcribe.BackendFor(o.Config.Transcriber)}, s.emit)
 	s.pipe.Start(ctx)
 	for _, sp := range []store.Speaker{store.Me, store.Them} {
 		s.capWG.Add(1)
@@ -173,7 +173,7 @@ func (s *Session) Paused() bool { return s.paused.Load() }
 // EchoOn reports whether echo cancel runs.
 func (s *Session) EchoOn() bool { return s.opts.Echo != nil && s.opts.Echo.Active() }
 
-// Pending returns the number of chunks that wait for Groq.
+// Pending returns the number of chunks that wait for the backend.
 func (s *Session) Pending() int { return s.pipe.Pending() }
 
 // Stop ends the captures and drains the queue in the background.
