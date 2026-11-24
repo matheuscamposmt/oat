@@ -20,6 +20,12 @@ type (
 	}
 )
 
+// handoffDoneMsg comes when the handoff of a meeting ends.
+type handoffDoneMsg struct {
+	id, target string
+	err        error
+}
+
 // summarizeCmd runs fn for the meeting in the background.
 func summarizeCmd(fn func(string) error, id string) tea.Cmd {
 	return func() tea.Msg { return summaryDoneMsg{id: id, err: fn(id)} }

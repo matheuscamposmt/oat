@@ -13,7 +13,7 @@ func TestVersionAndHelp(t *testing.T) {
 		t.Fatalf("version: %d %q", code, out.String())
 	}
 	out.Reset()
-	if code := run([]string{"help"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "oat new [title]") {
+	if code := run([]string{"help"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "oat new [title]") || !strings.Contains(out.String(), "oat handoff [id]") {
 		t.Fatalf("help: %d %q", code, out.String())
 	}
 }

@@ -233,3 +233,17 @@ func TestEnhancePrompt(t *testing.T) {
 		t.Fatalf("prompt:\n%s", msg)
 	}
 }
+
+func TestToolsShowTheNewTitle(t *testing.T) {
+	st, weekly, _ := fixture(t)
+	if err := st.Rename(weekly.Meta.ID, "Sync CVM"); err != nil {
+		t.Fatal(err)
+	}
+	cs := connect(t, st)
+	if out, _ := call(t, cs, "list_meetings", map[string]any{"query": "cvm"}); !strings.Contains(out, weekly.Meta.ID+" | Sync CVM |") {
+		t.Fatalf("list:\n%s", out)
+	}
+	if out, _ := call(t, cs, "get_meeting", map[string]any{"id": weekly.Meta.ID}); !strings.HasPrefix(out, "# Sync CVM\n") {
+		t.Fatalf("get:\n%s", out)
+	}
+}

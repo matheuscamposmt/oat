@@ -133,7 +133,13 @@ The notes pane has the focus when the recording starts, so you can type right aw
 
 After you stop, oat finishes the last chunks and writes the summary. `enter` opens the meeting on its summary, and any other key goes back to the list. If you quit before the chunks are done, the next start of oat finishes them.
 
-In the list, `s` writes the summary of the selected meeting again. In a meeting, `s` switches between the summary and your notes, `y` copies the one on screen, and `r` writes the summary again.
+In the list, `s` writes the summary of the selected meeting again. In a meeting, `s` switches between the summary and your notes, `y` copies the one on screen, `r` writes the summary again, and `o` [hands the meeting off](#hand-a-meeting-to-a-bot).
+
+## Rename a meeting
+
+Press `t` in the list or in a meeting. The title shows up in a text field. `enter` saves it and `esc` cancels. An empty title keeps the old one.
+
+oat writes the new title to `meta.json` and to the heading of `transcript.md`. The list, the meeting screen, and the MCP tools show it. The folder keeps its name, so the meeting ID does not change. The heading of a `summary.md` that is already written does not change either. oat does not rename a meeting while it records.
 
 ## Transcribe an audio file
 
@@ -210,6 +216,31 @@ In Claude Code, ask something like "what did they say about the budget in the la
 
 To write the summary inside your Claude Code session, run `/mcp__oat__enhance`. Any other MCP client that can start a stdio server can use `oat mcp` the same way.
 
+## Hand a meeting to a bot
+
+`oat handoff` sends the summary of a meeting to a command of your choice: a message to an agent, a webhook, a chat. Add a target to `config.toml`:
+
+```toml
+[handoff.techlead]
+command = ["orca-ide", "orchestration", "send", "--on", "cvm-dev", "--to", "bot:Tech Lead",
+           "--type", "handoff", "--subject", "{title}", "--body-file", "{file}"]
+
+[handoff.hook]
+command = ["curl", "-sf", "-X", "POST", "--data-binary", "@{file}", "https://example.invalid/hook"]
+```
+
+```sh
+oat handoff                     # the latest meeting, to the only target
+oat handoff ID --to hook        # --to is needed when there are two or more targets
+oat handoff --dry-run           # show the file and the command, and run nothing
+```
+
+oat writes a Markdown file in a temp folder with the title, the date, the meeting ID, and `summary.md`. Then it runs the command without a shell. In each argument, it replaces `{file}` with the path of that file, `{title}` with the title, `{date}` with the start (`2026-11-24 10:05`), and `{meeting}` with the meeting ID. oat prints the output of the command and deletes the file. If the command fails, oat prints its errors and exits with code 1. A command that runs for more than 2 minutes is stopped.
+
+A meeting without a summary stops with a message: run `oat summary ID` first.
+
+In a meeting, `o` does the same. With one target, oat asks first. With more, it shows them by number. The status line says "Sent", or shows the first line of the error.
+
 ## Echo
 
 With speakers, the microphone also hears the other people, so their words show up twice. oat handles this in two layers.
@@ -233,7 +264,7 @@ keep_audio = false                 # keep the WAV chunks in audio/
 groq_api_key = ""                  # Groq only: used when GROQ_API_KEY is not set
 ```
 
-The flags `--transcriber`, `--no-live`, `--lang`, `--model`, `--echo`, and `--keep-audio` override the file. The file also holds the named lists of key terms, in `[keyterms.NAME]` tables. See [Key terms](#key-terms).
+The flags `--transcriber`, `--no-live`, `--lang`, `--model`, `--echo`, and `--keep-audio` override the file. The file also holds the named lists of key terms, in `[keyterms.NAME]` tables (see [Key terms](#key-terms)), and the handoff targets, in `[handoff.NAME]` tables (see [Hand a meeting to a bot](#hand-a-meeting-to-a-bot)).
 
 ## Files
 

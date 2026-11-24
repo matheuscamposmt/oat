@@ -34,6 +34,8 @@ type homeModel struct {
 	filtering     bool
 	title         textinput.Model
 	naming        bool
+	rename        textinput.Model
+	renaming      bool
 	confirmDelete bool
 	starting      bool // the app sets it while a recording starts
 	drain         map[string]int
@@ -51,7 +53,14 @@ func newHomeModel(t Theme, st *store.Store) homeModel {
 	title := textinput.New()
 	title.Prompt = "Title: "
 	title.Placeholder = "empty for Meeting HH:MM"
-	return homeModel{theme: t, st: st, filter: filter, title: title, drain: map[string]int{}, writing: map[string]bool{}}
+	return homeModel{theme: t, st: st, filter: filter, title: title, rename: newRenameInput(), drain: map[string]int{}, writing: map[string]bool{}}
+}
+
+// newRenameInput is the input that t opens in the list and in a meeting.
+func newRenameInput() textinput.Model {
+	in := textinput.New()
+	in.Prompt = "Title: "
+	return in
 }
 
 func loadRows(st *store.Store) tea.Cmd {
@@ -100,6 +109,7 @@ func (h homeModel) Update(msg tea.Msg) (homeModel, tea.Cmd) {
 		h.width, h.height = msg.Width, msg.Height
 		h.filter.SetWidth(max(msg.Width-10, 10))
 		h.title.SetWidth(max(msg.Width-14, 10))
+		h.rename.SetWidth(max(msg.Width-14, 10))
 	case rowsMsg:
 		h.rows = msg.rows
 		h.clampCursor()
@@ -139,6 +149,26 @@ func (h homeModel) key(k tea.KeyPressMsg) (homeModel, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		h.title, cmd = h.title.Update(k)
+		return h, cmd
+	case h.renaming:
+		switch key {
+		case "enter", "esc":
+			h.renaming = false
+			h.rename.Blur()
+			r, ok := h.selected()
+			if key == "esc" || !ok {
+				return h, nil
+			}
+			st, title := h.st, h.rename.Value()
+			return h, func() tea.Msg {
+				if err := st.Rename(r.Meta.ID, title); err != nil {
+					return homeErrMsg{err}
+				}
+				return loadRows(st)()
+			}
+		}
+		var cmd tea.Cmd
+		h.rename, cmd = h.rename.Update(k)
 		return h, cmd
 	case h.filtering:
 		switch key {
@@ -191,6 +221,12 @@ func (h homeModel) key(k tea.KeyPressMsg) (homeModel, tea.Cmd) {
 		if _, ok := h.selected(); ok {
 			h.confirmDelete = true
 		}
+	case "t":
+		if r, ok := h.selected(); ok {
+			h.renaming = true
+			h.rename.SetValue(r.Meta.Title)
+			return h, h.rename.Focus()
+		}
 	case "s":
 		r, ok := h.selected()
 		if !ok || h.summarize == nil || h.writing[r.Meta.ID] || r.Meta.Status == store.Recording {
@@ -236,6 +272,8 @@ func (h homeModel) View() string {
 	switch {
 	case h.naming:
 		bottom = "  " + h.title.View()
+	case h.renaming:
+		bottom = "  " + h.rename.View()
 	case h.filtering:
 		bottom = "  " + h.filter.View()
 	case h.confirmDelete:
@@ -246,12 +284,15 @@ func (h homeModel) View() string {
 	case h.starting:
 		bottom = "  " + dim.Render("Starting the recording…")
 	}
-	keys := "n new · enter open · s summary · / filter · d delete · q quit"
+	keys := "n new · enter open · s summary · t title · / filter · d delete · q quit"
 	if h.summarize == nil {
-		keys = "n new · enter open · / filter · d delete · q quit"
+		keys = "n new · enter open · t title · / filter · d delete · q quit"
 	}
-	if h.naming {
+	switch {
+	case h.naming:
 		keys = "enter start recording · esc cancel"
+	case h.renaming:
+		keys = "enter save · esc cancel"
 	}
 	divider := t.style(t.Border).Render(strings.Repeat("─", h.width))
 	return lipgloss.JoinVertical(lipgloss.Left, header, "", strings.Join(lines, "\n"), ansiTrunc(bottom, h.width), divider, "  "+ansiTrunc(dim.Render(keys), h.width-2))

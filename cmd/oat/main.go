@@ -26,6 +26,7 @@ import (
 	"github.com/matheuscamposmt/oat/internal/config"
 	"github.com/matheuscamposmt/oat/internal/doctor"
 	"github.com/matheuscamposmt/oat/internal/groq"
+	"github.com/matheuscamposmt/oat/internal/handoff"
 	"github.com/matheuscamposmt/oat/internal/keyterms"
 	"github.com/matheuscamposmt/oat/internal/mcpserver"
 	"github.com/matheuscamposmt/oat/internal/session"
@@ -43,6 +44,8 @@ Usage:
   oat                       open the list of meetings
   oat new [title]           start a recording now
   oat summary [id]          write summary.md with Claude Code (default: the latest meeting)
+  oat handoff [id] [--to NAME] [--dry-run]
+                            send summary.md to a [handoff.NAME] command (default: the latest meeting)
   oat transcribe FILE       print the text of an audio file
   oat keyterms list [NAME]  show the key term lists, or the terms that one list sends
   oat keyterms add NAME TERM...
@@ -91,6 +94,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runSummary(args, stdout, stderr)
 	case "transcribe":
 		return runTranscribe(args, stdout, stderr)
+	case "handoff":
+		return runHandoff(args, stdout, stderr)
 	case "keyterms":
 		return runKeyterms(args, stdout, stderr)
 	case "doctor":
@@ -147,6 +152,10 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	if _, err := keyterms.Pick(lists, *set, ""); err != nil {
+		return fail(stderr, err)
+	}
+	targets, err := handoff.Load(paths.Config)
+	if err != nil {
 		return fail(stderr, err)
 	}
 	client, claude, err := newClient(cfg, paths)
@@ -207,8 +216,21 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 			session.Drain(ctx, st, client, cfg, emit)
 		},
 		Summarize: summarizer(cfg),
-		AutoStart: isNew,
-		NewTitle:  title,
+		Handoff: func(id, name string) error {
+			t, err := handoff.Pick(targets, name)
+			if err != nil {
+				return err
+			}
+			m, err := st.Load(id)
+			if err != nil {
+				return err
+			}
+			_, err = handoff.Send(ctx, m, t)
+			return err
+		},
+		HandoffTargets: handoff.Names(targets),
+		AutoStart:      isNew,
+		NewTitle:       title,
 	}
 	if err := tui.Run(ctx, deps); err != nil {
 		return fail(stderr, err)
@@ -258,12 +280,7 @@ func runSummary(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	st := store.New(paths.Meetings())
-	var m *store.Meeting
-	if id := fs.Arg(0); id == "" || id == "latest" {
-		m, err = st.Latest()
-	} else {
-		m, err = st.Load(id)
-	}
+	m, err := loadMeeting(st, fs.Arg(0))
 	if err != nil {
 		return fail(stderr, err)
 	}
