@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -24,6 +25,8 @@ type viewerModel struct {
 	right       viewport.Model
 	editor      textarea.Model
 	editing     bool
+	rename      textinput.Model
+	renaming    bool
 	showSummary bool
 	focusRight  bool
 	width       int
@@ -50,7 +53,7 @@ func newViewerModel(t Theme, st *store.Store, id string) (viewerModel, error) {
 	ed.Prompt = ""
 	return viewerModel{
 		theme: t, st: st, m: m, meta: m.Meta, segs: store.Clean(segs), notesText: notes, summary: summary,
-		left: viewport.New(), right: viewport.New(), editor: ed,
+		left: viewport.New(), right: viewport.New(), editor: ed, rename: newRenameInput(),
 		showSummary: strings.TrimSpace(summary) != "", // the summary is what people open a meeting for
 	}, nil
 }
@@ -59,6 +62,7 @@ func (v viewerModel) Update(msg tea.Msg) (viewerModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		v.width, v.height = msg.Width, msg.Height
+		v.rename.SetWidth(max(msg.Width-14, 10))
 		v.layout()
 		return v, nil
 	case tea.KeyPressMsg:
@@ -90,6 +94,27 @@ func (v viewerModel) Update(msg tea.Msg) (viewerModel, tea.Cmd) {
 
 func (v viewerModel) key(k tea.KeyPressMsg) (viewerModel, tea.Cmd) {
 	key := k.String()
+	if v.renaming {
+		switch key {
+		case "enter", "esc":
+			v.renaming = false
+			v.rename.Blur()
+			if key == "esc" {
+				return v, nil
+			}
+			if err := v.st.Rename(v.meta.ID, v.rename.Value()); err != nil {
+				v.err = "Could not rename the meeting: " + err.Error()
+				return v, nil
+			}
+			if m, err := v.st.Load(v.meta.ID); err == nil {
+				v.m, v.meta = m, m.Meta
+			}
+			return v, nil
+		}
+		var cmd tea.Cmd
+		v.rename, cmd = v.rename.Update(k)
+		return v, cmd
+	}
 	if v.editing {
 		if key == "esc" {
 			v.editing = false
@@ -111,6 +136,10 @@ func (v viewerModel) key(k tea.KeyPressMsg) (viewerModel, tea.Cmd) {
 	case "tab":
 		v.focusRight = !v.focusRight
 		return v, nil
+	case "t":
+		v.renaming, v.err, v.note = true, "", ""
+		v.rename.SetValue(v.meta.Title)
+		return v, v.rename.Focus()
 	case "e":
 		v.editing, v.showSummary = true, false
 		v.editor.SetValue(v.notesText)
@@ -202,6 +231,8 @@ func (v viewerModel) View() string {
 	body := lipgloss.JoinHorizontal(lipgloss.Top, Indent(left, 2), " ", sep, " ", right)
 	status := ""
 	switch {
+	case v.renaming:
+		status = v.rename.View()
 	case v.err != "":
 		status = t.style(t.Err).Render("! " + v.err)
 	case v.writing:
@@ -209,9 +240,12 @@ func (v viewerModel) View() string {
 	case v.note != "":
 		status = accent.Render("✓ " + v.note)
 	}
-	keys := "esc back · s summary/notes · y copy · r rewrite · e edit · tab"
+	keys := "esc back · s summary/notes · y copy · r rewrite · e edit · t title · tab"
 	if v.summarize == nil {
-		keys = "esc back · s summary/notes · y copy · e edit · tab"
+		keys = "esc back · s summary/notes · y copy · e edit · t title · tab"
+	}
+	if v.renaming {
+		keys = "enter save · esc cancel"
 	}
 	divider := t.style(t.Border).Render(strings.Repeat("─", v.width))
 	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "  "+ansiTrunc(status, v.width-2), divider, "  "+ansiTrunc(dim.Render(keys), v.width-2))
