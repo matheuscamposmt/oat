@@ -6,11 +6,13 @@
   <img src="docs/hud.png" alt="The oat recording screen: a live transcript on the left and your notes on the right" width="920">
 </p>
 
-oat records any meeting on Linux: Google Meet, Zoom, Teams, or a call in the browser. It captures your microphone and the system audio as two separate streams, so the transcript knows who said what. You type rough notes next to the live transcript. When the meeting ends, Claude Code merges your notes with the transcript into a clean summary.
+oat records any meeting on Linux: Google Meet, Zoom, Teams, or a call in the browser. It captures your microphone and the system audio as two separate streams, so the transcript knows who said what. The words show up in the HUD about a second after they are said, and they get corrected as the speech goes on. You type rough notes next to them. When you stop, Claude Code merges your notes with the transcript into a summary, and oat saves it next to the meeting.
 
-oat needs no new account and no API key. The transcription uses the speech-to-text service of the Claude Code voice mode, with the login that Claude Code already has. The summary runs in Claude Code through an MCP server. If Claude Code works on your machine, oat works too.
+oat needs no new account and no API key. The transcription uses the speech-to-text service of the Claude Code voice mode, with the login that Claude Code already has. The summary runs in Claude Code too. If Claude Code works on your machine, oat works too.
 
 - No keys to manage: `oat doctor` finds your Claude Code login and tests it.
+- A live transcript, with the corrections of the speech model as they happen.
+- A summary after each meeting: summary, decisions, action items, and your notes expanded. Press `ctrl+b` during the meeting to mark a moment, and the summary explains it.
 - Two audio streams that never mix, "Me" and "Them", plus echo cancel for speakers.
 - Plain files: each meeting is a folder of Markdown and JSONL on your disk.
 - Each audio chunk goes to disk before it goes to the network, so a crash loses at most 30 seconds.
@@ -30,7 +32,7 @@ oat new "Weekly sync"
 
 Or build it from source with `make install` (see [Install](#install)).
 
-Press `ctrl+s` to stop. Then run `/mcp__oat__enhance` in Claude Code to get the summary.
+Press `ctrl+s` to stop. oat writes the summary a few seconds later, and `enter` opens it.
 
 This is an early version. It runs on Linux only and was tested on Pop!_OS 22.04 with PipeWire.
 
@@ -38,13 +40,19 @@ This is an early version. It runs on Linux only and was tested on Pop!_OS 22.04 
 
 `oat new "Title"` starts a recording. Two `parec` processes capture the mic ("Me") and the monitor of your default output ("Them"). The two streams never mix, so the transcript knows who said what.
 
-Each stream is cut at pauses into chunks of 10 to 30 seconds. Chunks without speech are not sent. oat sends each chunk over its own connection to the Claude Code voice stream, as fast as the connection takes it, and gets the text back in about 3 seconds. A line shows up in the transcript about 10 to 30 seconds after it was said, because oat waits for the pause that ends the chunk.
+Each stream is cut at pauses into chunks of 10 to 30 seconds. A chunk opens its own connection to the Claude Code voice stream after half a second of speech, and its audio goes out in real time. The partial text comes back 0.3 to 1 second after the speech, and the HUD shows it dim, with an ellipsis. At the pause, oat closes the connection, gets the final text, and writes it to the transcript. Short noises, such as a key press, open no connection.
+
+A connection lives for one chunk only. In tests, one connection for a whole meeting returned no final text until it closed, so a failure would lose everything. The server also refuses a sixth connection at the same time, and oat keeps at most four open.
+
+If a live connection fails, the chunk file on disk goes to a queue, and oat sends it again as fast as the connection takes it. With `live = false`, every chunk takes that path, and a line shows up 10 to 30 seconds after it was said.
 
 The voice stream gives text without times. oat splits the text of a chunk into sentences and gives each sentence a part of the chunk in proportion to its length. The times in the transcript are therefore estimates inside each chunk.
 
 While the meeting runs you type notes in the right pane. Notes are saved 2 seconds after you stop typing, and each audio chunk is written to disk as soon as it is cut, so a crash loses the audio still in memory (under 30 seconds) and nothing else.
 
-`oat mcp` gives an MCP client access to the meetings. In Claude Code, `/mcp__oat__enhance` asks Claude to merge your notes with the transcript, in the style of Granola, and save the result as `summary.md`.
+After the stop, oat runs `claude -p` in safe mode, with no tools, and gives it your notes and the transcript. It saves the answer as `summary.md`, in the language of the meeting. If the meeting still has the default title, such as "Meeting 14:30", the summary gives it a better one. The summary runs in its own process, so it ends even if you quit oat, and a desktop notification says when it is ready. `oat summary [id]` writes it again from the command line.
+
+`oat mcp` gives an MCP client access to the meetings. In Claude Code, `/mcp__oat__enhance` writes the summary inside your Claude Code session, where you can ask for changes.
 
 Audio chunks go to the voice endpoint at api.anthropic.com (or to Groq, with `transcriber = "groq"`) and are deleted once they are transcribed. Anthropic does not document which service transcribes the audio behind that endpoint. Set `keep_audio = true` to keep the chunks. Transcripts, notes, and summaries stay on your disk.
 
@@ -101,13 +109,16 @@ The notes pane has the focus when the recording starts, so you can type right aw
 | Key | Action |
 |---|---|
 | `tab` | Move the focus between the transcript and the notes |
+| `ctrl+b` | Mark this moment in the notes; the summary explains it |
 | `ctrl+p` | Pause or resume |
 | `ctrl+l` | Change the language for the next chunks: `pt`, `en`, `auto` |
 | `ctrl+s` | Stop and save |
 | `ctrl+c` | Stop and save, after a yes/no question |
 | `?` | Show the keys (in the transcript pane) |
 
-After you stop, oat uploads the last chunks. If you quit before that is done, the next start of oat finishes it.
+After you stop, oat finishes the last chunks and writes the summary. `enter` opens the meeting on its summary, and any other key goes back to the list. If you quit before the chunks are done, the next start of oat finishes them.
+
+In the list, `s` writes the summary of the selected meeting again. In a meeting, `s` switches between the summary and your notes, `y` copies the one on screen, and `r` writes the summary again.
 
 ## Ask Claude about your meetings
 
@@ -120,7 +131,7 @@ In Claude Code, ask something like "what did they say about the budget in the la
 | `search_meetings` | Finds text in all transcripts and notes |
 | `save_summary` | Saves meeting notes as `summary.md` |
 
-To get the summary, run `/mcp__oat__enhance`. Any other MCP client that can start a stdio server can use `oat mcp` the same way.
+To write the summary inside your Claude Code session, run `/mcp__oat__enhance`. Any other MCP client that can start a stdio server can use `oat mcp` the same way.
 
 ## Echo
 
@@ -136,6 +147,8 @@ The second is a text filter that drops a "Me" line when it repeats a "Them" line
 
 ```toml
 transcriber = "claude"             # claude or groq
+live = true                        # claude only: send the audio while people speak
+auto_summary = true                # write summary.md with claude -p after each meeting
 lang = "pt"                        # ISO 639-1 code, or "auto"
 model = "whisper-large-v3-turbo"   # Groq only: or "whisper-large-v3"
 echo = "auto"                      # auto, on, off
@@ -143,7 +156,7 @@ keep_audio = false                 # keep the WAV chunks in audio/
 groq_api_key = ""                  # Groq only: used when GROQ_API_KEY is not set
 ```
 
-The flags `--transcriber`, `--lang`, `--model`, `--echo`, and `--keep-audio` override the file.
+The flags `--transcriber`, `--no-live`, `--lang`, `--model`, `--echo`, and `--keep-audio` override the file.
 
 ## Files
 
@@ -169,6 +182,7 @@ oat uses `wss://api.anthropic.com/api/ws/speech_to_text/voice_stream`, the endpo
 - oat uses the claude.ai login of Claude Code outside Claude Code. Read the terms of your plan before you use it.
 - The endpoint can drop the last words of a chunk that ends in the middle of a sentence.
 - If the token expires during a meeting, the chunks wait on disk and oat tries again. Open Claude Code to renew the token.
+- The server allows about five connections at the same time for one login. oat keeps at most four. If the voice mode of Claude Code runs at the same time, oat can get a rate limit, and it waits a few seconds.
 
 ## Groq limits
 
