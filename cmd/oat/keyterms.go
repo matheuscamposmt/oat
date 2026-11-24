@@ -242,3 +242,38 @@ func warnAccents(w io.Writer, terms []string) {
 		fmt.Fprintf(w, "Warning: Claude drops the accented letters of %s. Write them without accents.\n", strings.Join(accented, ", "))
 	}
 }
+
+// offerScan asks for project folders and scans each one, for oat setup.
+func offerScan(ctx context.Context, in *bufio.Reader, w io.Writer, cfgPath string) {
+	fmt.Fprintln(w, "\nKey terms help the transcription spell the names of your projects. oat can find them in the documents of a project.")
+	fmt.Fprintln(w, "Type the folders of your projects, one per line, and an empty line to end:")
+	var folders []string
+	for {
+		line, err := in.ReadString('\n')
+		if line = strings.TrimSpace(line); line == "" {
+			break
+		}
+		folders = append(folders, line)
+		if err != nil {
+			break
+		}
+	}
+	if len(folders) == 0 {
+		return
+	}
+	scan, err := newScanner()
+	if err != nil {
+		fmt.Fprintln(w, err)
+		return
+	}
+	fmt.Fprintln(w, "The documents of each folder go to Claude, the same as in a Claude Code session there.")
+	for _, f := range folders {
+		lists, err := keyterms.Load(cfgPath)
+		if err == nil {
+			err = scanFolder(ctx, scan, in, w, cfgPath, lists, f, "")
+		}
+		if err != nil {
+			fmt.Fprintf(w, "Scan of %s: %v\n", f, err)
+		}
+	}
+}

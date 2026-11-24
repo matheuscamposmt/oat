@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -185,5 +186,33 @@ func TestKeytermsScanAllKeepsTheOldTerms(t *testing.T) {
 	lists, _ := keyterms.Load(path)
 	if strings.Join(lists[0].Terms, ",") != "RAIS,Neo4j" || len(*folders) != 1 {
 		t.Fatalf("lists %+v, scanned %q", lists, *folders)
+	}
+}
+
+func TestSetupScansTheFoldersItGets(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	a, b := t.TempDir(), t.TempDir()
+	folders := fakeScan(t, []string{"RAIS"}, "")
+	in := bufio.NewReader(strings.NewReader(a + "\n" + b + "\n\n\ny\n\nn\n"))
+	var out bytes.Buffer
+	offerScan(context.Background(), in, &out, filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "oat", "config.toml"))
+	if len(*folders) != 2 || (*folders)[0] != a || (*folders)[1] != b {
+		t.Fatalf("scanned %q", *folders)
+	}
+	if i, j := strings.Index(out.String(), "documents of each folder go to Claude"), strings.Index(out.String(), " 1. RAIS"); i < 0 || i > j {
+		t.Fatalf("no notice before the first scan:\n%s", out.String())
+	}
+	lists, _ := keyterms.Load(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "oat", "config.toml"))
+	if len(lists) != 1 || lists[0].Name != filepath.Base(a) {
+		t.Fatalf("lists %+v", lists)
+	}
+}
+
+func TestSetupWithoutFoldersScansNothing(t *testing.T) {
+	folders := fakeScan(t, []string{"RAIS"}, "")
+	var out bytes.Buffer
+	offerScan(context.Background(), bufio.NewReader(strings.NewReader("\n")), &out, filepath.Join(t.TempDir(), "config.toml"))
+	if len(*folders) != 0 || strings.Contains(out.String(), "go to Claude") {
+		t.Fatalf("scanned %q:\n%s", *folders, out.String())
 	}
 }

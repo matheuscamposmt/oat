@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/matheuscamposmt/oat/internal/audio"
 	"github.com/matheuscamposmt/oat/internal/claudestt"
@@ -414,5 +416,16 @@ func runSetup(stdout, stderr io.Writer) int {
 	if err := doctor.Setup(context.Background(), audio.Exec, exec.LookPath, bin, stdout); err != nil {
 		return fail(stderr, err)
 	}
+	// Without a terminal, for example in make install from a script, oat asks nothing.
+	if !term.IsTerminal(os.Stdin.Fd()) {
+		return 0
+	}
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	offerScan(ctx, bufio.NewReader(os.Stdin), stdout, paths.Config)
 	return 0
 }
