@@ -107,3 +107,51 @@ The tests above used one stream. `oat transcribe` sends chunks, and the chunker 
 - The skill is `transcribe` in English, as the rest of oat, so the command is `/oat:transcribe`.
 - No automatic switch to Groq when the Claude backend fails. The user picks the backend with `--transcriber`.
 - Text only on stdout. Saving a file is the job of the skill.
+
+## Addendum: key terms in meetings and named lists (2026-11-24)
+
+The meeting of 2026-11-24 came out with "raiz" and "RAID" for RAIS, "webcontas" for LabContas, "Enter ID" for Entra ID, "The Beaver" for DBeaver, and "Flow 3" for Airflow 3. Meetings send no key terms today. The user records meetings about different projects (CVM, NEXO), so one list would push the terms of one project into the others.
+
+Claude Code builds its own voice key terms with no configuration: a fixed base of 14 coding terms, the project folder name, and the words of the git branch, at most 50 terms. oat follows the same idea.
+
+### Sources of the terms, in priority order until the limit
+
+1. `--keyterms` of `oat new` or `oat transcribe`.
+2. The named list chosen for the recording.
+3. The words of the meeting title, split like Claude Code splits a branch (spaces, `-_./`, camelCase), 3 to 20 characters each.
+4. A generic base in the code: MCP, OAuth, webhook, worktree, subagent, JSON, TypeScript, localhost, regex, codebase, gRPC.
+
+The limit is 50 terms and 1024 characters, the same as Claude Code.
+
+### Named lists
+
+```toml
+[keyterms.cvm-app]
+folder = "/home/user/projects/cvm-app"
+terms = ["RAIS", "LabContas", "Entra ID"]
+```
+
+- `oat new --keyterms-set NAME` chooses a list. Without it, oat chooses the first list whose name appears in the meeting title, case and accents ignored. With no match, no list.
+- `oat transcribe` takes the same `--keyterms-set`.
+
+### `oat keyterms`
+
+- `oat keyterms list [NAME]`: the lists, or the effective terms of one list with the origin of each term. It warns about accented terms (Claude drops the accents) and about the limit.
+- `oat keyterms add NAME TERM...` and `oat keyterms rm NAME TERM...`.
+- `oat keyterms scan FOLDER [--name NAME]`: runs `claude -p` with only `Read`, `Glob` and `Grep`, with access to FOLDER only, and asks for proper names, acronyms, systems and products from the files that describe the project (README, CLAUDE.md, AGENTS.md, docs, glossaries, folder names), at most 50 terms, no accents. oat shows the proposed list, the user removes terms and confirms, and only then oat saves it. The list name defaults to the folder name, and the folder path is saved with the list.
+- `oat keyterms scan --all`: scans again every list that has a folder.
+- `oat setup` offers the scan: it asks for folders, one per line, and runs the scan for each one. Before the first scan it says that the documents of the folder go to Claude, the same as in a Claude Code session there.
+
+### Meetings
+
+- The live stream and the replay queue send the key terms of the recording. The terms are fixed when the recording starts.
+- The terms used are saved in the meeting metadata, so a summary written again later knows them.
+
+### Plugin
+
+- A skill `/oat:keyterms` runs the same commands: scan the current project, or add a term after a wrong transcription ("RAIS came out as raiz").
+
+### Calls made by the author
+
+- No automatic update of the lists from the summaries in this change.
+- The scan reads descriptive files and names, not the whole code, to keep it short and cheap.
