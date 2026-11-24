@@ -18,13 +18,17 @@ oat needs no new account and no API key. The transcription uses the speech-to-te
 
 ## Quick start
 
+Download the static binary for Linux on x86-64:
+
 ```sh
-git clone https://github.com/matheuscamposmt/oat
-cd oat
-make install      # builds ~/.local/bin/oat and registers the MCP server in Claude Code
+curl -fsSL -o ~/.local/bin/oat https://github.com/matheuscamposmt/oat/releases/latest/download/oat-linux-amd64
+chmod +x ~/.local/bin/oat
+oat setup         # registers the MCP server in Claude Code
 oat doctor        # tests the audio, the Claude login, and the MCP server
 oat new "Weekly sync"
 ```
+
+Or build it from source with `make install` (see [Install](#install)).
 
 Press `ctrl+s` to stop. Then run `/mcp__oat__enhance` in Claude Code to get the summary.
 
