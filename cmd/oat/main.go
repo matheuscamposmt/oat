@@ -43,6 +43,8 @@ Usage:
   oat                       open the list of meetings
   oat new [title]           start a recording now
   oat summary [id]          write summary.md with Claude Code (default: the latest meeting)
+  oat handoff [id] [--to NAME] [--dry-run]
+                            send summary.md to a [handoff.NAME] command (default: the latest meeting)
   oat transcribe FILE       print the text of an audio file
   oat keyterms list [NAME]  show the key term lists, or the terms that one list sends
   oat keyterms add NAME TERM...
@@ -91,6 +93,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runSummary(args, stdout, stderr)
 	case "transcribe":
 		return runTranscribe(args, stdout, stderr)
+	case "handoff":
+		return runHandoff(args, stdout, stderr)
 	case "keyterms":
 		return runKeyterms(args, stdout, stderr)
 	case "doctor":
@@ -258,12 +262,7 @@ func runSummary(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	st := store.New(paths.Meetings())
-	var m *store.Meeting
-	if id := fs.Arg(0); id == "" || id == "latest" {
-		m, err = st.Latest()
-	} else {
-		m, err = st.Load(id)
-	}
+	m, err := loadMeeting(st, fs.Arg(0))
 	if err != nil {
 		return fail(stderr, err)
 	}
