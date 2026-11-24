@@ -39,32 +39,34 @@ func Claude(bin string) Runner {
 	return func(ctx context.Context, prompt string) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, Timeout)
 		defer cancel()
-		base := []string{"-p", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--output-format", "text"}
-		out, msg, err := runClaude(ctx, bin, append([]string{"--safe-mode"}, base...), prompt)
-		if err != nil && strings.Contains(msg, "unknown option") {
-			out, msg, err = runClaude(ctx, bin, base, prompt)
+		base := []string{"--tools", "", "--strict-mcp-config", "--no-session-persistence", "--output-format", "text"}
+		out, err := Print(ctx, bin, "", append([]string{"--safe-mode"}, base...), prompt)
+		if err != nil && strings.Contains(err.Error(), "unknown option") {
+			out, err = Print(ctx, bin, "", base, prompt)
 		}
-		if err != nil {
-			if r := []rune(msg); len(r) > 300 {
-				msg = string(r[:300])
-			}
-			return "", fmt.Errorf("claude -p failed: %v: %s", err, msg)
-		}
-		return out, nil
+		return out, err
 	}
 }
 
-func runClaude(ctx context.Context, bin string, args []string, prompt string) (out, msg string, err error) {
-	cmd := exec.CommandContext(ctx, bin, args...)
+// Print runs claude -p with args in the folder dir, or in the current folder
+// when dir is empty, sends the prompt on stdin, and returns the answer.
+func Print(ctx context.Context, bin, dir string, args []string, prompt string) (string, error) {
+	cmd := exec.CommandContext(ctx, bin, append([]string{"-p"}, args...)...)
+	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(prompt)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err = cmd.Run()
-	msg = strings.TrimSpace(stderr.String())
-	if msg == "" {
-		msg = strings.TrimSpace(stdout.String())
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
+		}
+		if r := []rune(msg); len(r) > 300 {
+			msg = string(r[:300])
+		}
+		return "", fmt.Errorf("claude -p failed: %v: %s", err, msg)
 	}
-	return stdout.String(), msg, err
+	return stdout.String(), nil
 }
 
 // Prompt returns the instructions and the data for the notes of a meeting.

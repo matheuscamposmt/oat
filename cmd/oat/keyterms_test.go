@@ -128,3 +128,62 @@ func TestKeytermsList(t *testing.T) {
 		t.Fatalf("limit warning: %q", out)
 	}
 }
+
+// fakeScan replaces the Claude scan and stdin.
+func fakeScan(t *testing.T, found []string, input string) *[]string {
+	t.Helper()
+	var folders []string
+	oldScanner, oldStdin := newScanner, stdin
+	t.Cleanup(func() { newScanner, stdin = oldScanner, oldStdin })
+	newScanner = func() (keyterms.Scanner, error) {
+		return func(ctx context.Context, folder string) ([]string, error) {
+			folders = append(folders, folder)
+			return found, nil
+		}, nil
+	}
+	stdin = strings.NewReader(input)
+	return &folders
+}
+
+func TestKeytermsScanSavesTheConfirmedTerms(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	folder := filepath.Join(t.TempDir(), "cvm-app")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	folders := fakeScan(t, []string{"RAIS", "Lab Contas", "Neo4j"}, "2\ny\n")
+	out := runOK(t, "keyterms", "scan", folder)
+	if !strings.Contains(out, " 2. Lab Contas") {
+		t.Fatalf("no numbered list in %q", out)
+	}
+	lists, _ := keyterms.Load(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "oat", "config.toml"))
+	if len(lists) != 1 || lists[0].Name != "cvm-app" || lists[0].Folder != folder || strings.Join(lists[0].Terms, ",") != "RAIS,Neo4j" {
+		t.Fatalf("lists %+v", lists)
+	}
+	if len(*folders) != 1 || (*folders)[0] != folder {
+		t.Fatalf("scanned %q", *folders)
+	}
+}
+
+func TestKeytermsScanWithoutYesSavesNothing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	fakeScan(t, []string{"RAIS"}, "\n")
+	if out := runOK(t, "keyterms", "scan", t.TempDir(), "--name", "cvm"); !strings.Contains(out, "Not saved") {
+		t.Fatalf("got %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "oat", "config.toml")); err == nil {
+		t.Fatal("the scan wrote config.toml")
+	}
+}
+
+func TestKeytermsScanAllKeepsTheOldTerms(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	folder := t.TempDir()
+	path := writeConfig(t, "[keyterms.cvm]\nfolder = \""+folder+"\"\nterms = [\"RAIS\"]\n\n[keyterms.nexo]\nterms = [\"NEXO\"]\n")
+	folders := fakeScan(t, []string{"Neo4j", "rais"}, "\ny\n")
+	runOK(t, "keyterms", "scan", "--all")
+	lists, _ := keyterms.Load(path)
+	if strings.Join(lists[0].Terms, ",") != "RAIS,Neo4j" || len(*folders) != 1 {
+		t.Fatalf("lists %+v, scanned %q", lists, *folders)
+	}
+}

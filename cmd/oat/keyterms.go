@@ -1,11 +1,20 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"unicode"
 
@@ -69,11 +78,130 @@ func runKeyterms(args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, err)
 		}
 		fmt.Fprintf(stdout, "The list %s has %d terms.\n", l.Name, len(l.Terms))
+	case cmd == "scan":
+		return runScan(args, paths.Config, lists, stdout, stderr)
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
 	return 0
+}
+
+// newScanner returns the scan with Claude Code. Tests replace it.
+var newScanner = func() (keyterms.Scanner, error) {
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return nil, errors.New("claude is not installed. Install Claude Code to scan a folder")
+	}
+	return keyterms.Claude(bin), nil
+}
+
+// stdin gives the answers to the questions. Tests replace it.
+var stdin io.Reader = os.Stdin
+
+func runScan(args []string, cfgPath string, lists []keyterms.List, stdout, stderr io.Writer) int {
+	fset := flag.NewFlagSet("scan", flag.ContinueOnError)
+	fset.SetOutput(stderr)
+	fset.Usage = func() { fmt.Fprint(stderr, usage) }
+	name := fset.String("name", "", "")
+	all := fset.Bool("all", false, "")
+	folders, err := parseInterspersed(fset, args)
+	if err != nil {
+		return 2
+	}
+	type job struct{ folder, name string }
+	var jobs []job
+	switch {
+	case *all && len(folders) == 0 && *name == "":
+		for _, l := range lists {
+			if l.Folder != "" {
+				jobs = append(jobs, job{l.Folder, l.Name})
+			}
+		}
+		if len(jobs) == 0 {
+			return fail(stderr, errors.New("no list has a folder"))
+		}
+	case !*all && len(folders) == 1:
+		jobs = append(jobs, job{folders[0], *name})
+	default:
+		fset.Usage()
+		return 2
+	}
+	scan, err := newScanner()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	in := bufio.NewReader(stdin)
+	for _, j := range jobs {
+		if err := scanFolder(ctx, scan, in, stdout, cfgPath, lists, j.folder, j.name); err != nil {
+			return fail(stderr, err)
+		}
+	}
+	return 0
+}
+
+// scanFolder asks Claude for the terms of a folder, adds them to the list,
+// lets the user remove terms, and saves the list after a yes. The list name
+// is the folder name when name is empty.
+func scanFolder(ctx context.Context, scan keyterms.Scanner, in *bufio.Reader, w io.Writer, cfgPath string, lists []keyterms.List, folder, name string) error {
+	folder, err := filepath.Abs(folder)
+	if err != nil {
+		return err
+	}
+	if fi, err := os.Stat(folder); err != nil {
+		return err
+	} else if !fi.IsDir() {
+		return fmt.Errorf("%s is not a folder", folder)
+	}
+	if name == "" {
+		name = filepath.Base(folder)
+	}
+	fmt.Fprintf(w, "Claude reads the documents of %s. This can take a few minutes.\n", folder)
+	found, err := scan(ctx, folder)
+	if err != nil {
+		return err
+	}
+	l, _ := keyterms.Pick(lists, name, "")
+	l.Name, l.Folder = name, folder
+	for _, t := range found {
+		if !slices.ContainsFunc(l.Terms, func(s string) bool { return strings.EqualFold(s, t) }) {
+			l.Terms = append(l.Terms, t)
+		}
+	}
+	for i, t := range l.Terms {
+		fmt.Fprintf(w, "%2d. %s\n", i+1, t)
+	}
+	fmt.Fprint(w, "Numbers of the terms to remove, separated by spaces (enter keeps all): ")
+	line, _ := in.ReadString('\n')
+	drop := map[int]bool{}
+	for _, f := range strings.Fields(line) {
+		n, err := strconv.Atoi(f)
+		if err != nil || n < 1 || n > len(l.Terms) {
+			return fmt.Errorf("%q is not a number from the list", f)
+		}
+		drop[n-1] = true
+	}
+	var keep []string
+	for i, t := range l.Terms {
+		if !drop[i] {
+			keep = append(keep, t)
+		}
+	}
+	l.Terms = keep
+	fmt.Fprintf(w, "Save %d terms in the list %s? [y/N] ", len(l.Terms), name)
+	answer, _ := in.ReadString('\n')
+	if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+		fmt.Fprintln(w, "Not saved.")
+		return nil
+	}
+	if err := keyterms.Save(cfgPath, l); err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "Saved the list %s in %s.\n", name, cfgPath)
+	warnAccents(w, l.Terms)
+	return nil
 }
 
 func printLists(w io.Writer, lists []keyterms.List) {
