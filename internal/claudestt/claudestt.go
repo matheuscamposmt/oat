@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -66,6 +67,8 @@ type Client struct {
 
 	// Trace, when set, gets the reason that ended each stream. Tests use it.
 	Trace func(reason string, endpoints int)
+	// beforeLastFrame, when set, runs before the last audio frame. Tests use it.
+	beforeLastFrame func()
 }
 
 // New returns a Client for the voice stream of Claude Code.
@@ -203,8 +206,11 @@ func (c *Client) Transcribe(ctx context.Context, wav []byte, opts stt.Options) (
 		}
 	}()
 
+	// sent is true when all the audio frames are written. The server can answer
+	// CloseStream and close before sendErr reaches the loop below.
+	var sent atomic.Bool
 	sendErr := make(chan error, 1)
-	go func() { sendErr <- sendAudio(ctx, conn, pcm) }()
+	go func() { sendErr <- sendAudio(ctx, conn, pcm, &sent, c.beforeLastFrame) }()
 
 	var col collector
 	var closed bool // CloseStream was sent
@@ -236,7 +242,7 @@ func (c *Client) Transcribe(ctx context.Context, wav []byte, opts stt.Options) (
 			if ev.err != nil {
 				st := websocket.CloseStatus(ev.err)
 				switch {
-				case !closed:
+				case !closed && !sent.Load():
 					// The server ended the stream before it got all the audio.
 					return stt.Result{}, c.streamError(outer, ctx, ev.err)
 				case st == websocket.StatusNormalClosure || st == websocket.StatusNoStatusRcvd:
@@ -344,15 +350,19 @@ func (c *Client) dial(ctx, outer context.Context, lang string) (*websocket.Conn,
 	return conn, nil
 }
 
-func sendAudio(ctx context.Context, conn *websocket.Conn, pcm []byte) error {
+func sendAudio(ctx context.Context, conn *websocket.Conn, pcm []byte, sent *atomic.Bool, beforeLast func()) error {
 	if err := conn.Write(ctx, websocket.MessageText, []byte(msgKeepAlive)); err != nil {
 		return err
 	}
 	for i := 0; i < len(pcm); i += frameBytes {
+		if beforeLast != nil && i+frameBytes >= len(pcm) {
+			beforeLast()
+		}
 		if err := conn.Write(ctx, websocket.MessageBinary, pcm[i:min(i+frameBytes, len(pcm))]); err != nil {
 			return err
 		}
 	}
+	sent.Store(true)
 	return conn.Write(ctx, websocket.MessageText, []byte(msgCloseStream))
 }
 

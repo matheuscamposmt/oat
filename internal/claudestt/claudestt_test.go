@@ -243,7 +243,12 @@ func TestNormalCloseBeforeTheEndOfTheAudioIsTemporary(t *testing.T) {
 		_, _, _ = c.Read(ctx) // the first frame
 		_ = c.Close(websocket.StatusNormalClosure, "session limit")
 	})
-	_, err := transcribe(t, testClient(t, srv), 30, "pt")
+	c := testClient(t, srv)
+	// Hold the last frame until the close arrives, so the close comes while
+	// the audio is still in flight. Without this, the socket buffers can take
+	// all the audio first, and then the client cannot see the early close.
+	c.beforeLastFrame = func() { time.Sleep(200 * time.Millisecond) }
+	_, err := transcribe(t, c, 30, "pt")
 	var tmp *stt.TemporaryError
 	if !errors.As(err, &tmp) {
 		t.Fatalf("got %T %v, want a temporary error: the chunk must stay on disk", err, err)
