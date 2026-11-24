@@ -79,6 +79,7 @@ type Pipeline struct {
 	m      *store.Meeting
 	client Client
 	cfg    Config
+	terms  []string
 	emit   func(any)
 	sleep  func(ctx context.Context, d time.Duration) error
 
@@ -111,7 +112,7 @@ func New(m *store.Meeting, client Client, cfg Config, emit func(any)) *Pipeline 
 		emit = func(any) {}
 	}
 	p := &Pipeline{
-		m: m, client: client, cfg: cfg, emit: emit, sleep: sleepCtx,
+		m: m, client: client, cfg: cfg, terms: m.Snapshot().Keyterms, emit: emit, sleep: sleepCtx,
 		queue: make(chan string, queueSize), tails: map[store.Speaker]string{},
 	}
 	if segs, err := m.Segments(); err == nil {
@@ -222,7 +223,7 @@ func (p *Pipeline) process(ctx context.Context, path string) error {
 	}
 	tries := 0
 	for {
-		opts := stt.Options{Model: p.cfg.Model, Language: p.cfg.Lang(), Prompt: p.promptFor(speaker)}
+		opts := stt.Options{Model: p.cfg.Model, Language: p.cfg.Lang(), Prompt: p.promptFor(speaker), Keyterms: p.terms}
 		res, err := p.client.Transcribe(ctx, wav, opts)
 		var rl *stt.RateLimitError
 		var auth *stt.AuthError

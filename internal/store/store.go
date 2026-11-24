@@ -53,6 +53,7 @@ type Meta struct {
 	Model     string    `json:"model"`
 	Echo      string    `json:"echo"`
 	Status    Status    `json:"status"`
+	Keyterms  []string  `json:"keyterms,omitempty"` // sent to the backend with each chunk
 }
 
 // Duration returns the length of the meeting. A meeting without an end uses now.

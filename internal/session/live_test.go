@@ -201,8 +201,8 @@ func TestLiveSession(t *testing.T) {
 	var liveEvents int
 	if os.Getenv("OAT_LIVE_MODE") == "live" {
 		speed = 1 // the live stream must get real time
-		live = func(ctx context.Context, lang string, onText func(string)) (LiveStream, error) {
-			st, err := client.Open(ctx, lang, onText)
+		live = func(ctx context.Context, lang string, keyterms []string, onText func(string)) (LiveStream, error) {
+			st, err := client.Open(ctx, lang, keyterms, onText)
 			if err != nil {
 				return nil, err
 			}

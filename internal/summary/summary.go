@@ -99,7 +99,11 @@ The user marked moments with "` + Mark + ` HH:MM:SS" lines in the notes. For eac
 The notes of the user, expanded with facts from the transcript. Keep the words and the order of the user.
 
 `)
-	fmt.Fprintf(&b, "Meeting: %s, %s, %s long.\n\n", meta.Title, meta.StartedAt.Format("2006-01-02 15:04"), store.Clock(meta.Duration(time.Now()).Seconds()))
+	fmt.Fprintf(&b, "Meeting: %s, %s, %s long.\n", meta.Title, meta.StartedAt.Format("2006-01-02 15:04"), store.Clock(meta.Duration(time.Now()).Seconds()))
+	if len(meta.Keyterms) > 0 {
+		b.WriteString("Key terms of the meeting, as they are spelled: " + strings.Join(meta.Keyterms, ", ") + ". The transcript can spell them wrong.\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("<notes>\n" + strings.TrimSpace(notes) + "\n</notes>\n\n<transcript>\n")
 	for _, l := range store.TranscriptLines(store.Clean(segs), false) {
 		b.WriteString(l + "\n")

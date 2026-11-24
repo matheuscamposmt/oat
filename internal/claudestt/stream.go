@@ -39,8 +39,8 @@ type Stream struct {
 // change: the final utterances and the current one. It runs on the goroutine
 // of the stream, so it must not block. Open waits for a free slot when the
 // Client already has Streams streams open.
-func (c *Client) Open(ctx context.Context, lang string, onText func(string)) (*Stream, error) {
-	return c.open(ctx, ctx, lang, "", onText)
+func (c *Client) Open(ctx context.Context, lang string, keyterms []string, onText func(string)) (*Stream, error) {
+	return c.open(ctx, ctx, lang, EncodeKeyterms(keyterms), onText)
 }
 
 func (c *Client) slots() chan struct{} {

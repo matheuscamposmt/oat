@@ -446,7 +446,7 @@ func TestStreamSendsPartialText(t *testing.T) {
 	})
 	var mu sync.Mutex
 	var seen []string
-	st, err := testClient(t, srv).Open(context.Background(), "pt", func(s string) {
+	st, err := testClient(t, srv).Open(context.Background(), "pt", nil, func(s string) {
 		mu.Lock()
 		seen = append(seen, s)
 		mu.Unlock()
@@ -481,13 +481,13 @@ func TestStreamsWaitForAFreeSlot(t *testing.T) {
 	})
 	c := testClient(t, srv)
 	c.Streams = 1
-	first, err := c.Open(context.Background(), "pt", nil)
+	first, err := c.Open(context.Background(), "pt", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	opened := make(chan *Stream, 1)
 	go func() {
-		s, err := c.Open(context.Background(), "pt", nil)
+		s, err := c.Open(context.Background(), "pt", nil, nil)
 		if err != nil {
 			t.Error(err)
 		}
@@ -528,7 +528,7 @@ func TestCloseDropsTheStream(t *testing.T) {
 	srv, _ := newServer(t, 0, func(ctx context.Context, c *websocket.Conn, f *fakeServer) {
 		<-ctx.Done()
 	})
-	st, err := testClient(t, srv).Open(context.Background(), "pt", nil)
+	st, err := testClient(t, srv).Open(context.Background(), "pt", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,5 +575,22 @@ func TestTranscribeSendsKeytermsHeader(t *testing.T) {
 func TestTranscribeWithoutKeytermsSendsNoHeader(t *testing.T) {
 	if v := transcribeKeyterms(t, nil).Values("x-config-keyterms"); v != nil {
 		t.Fatalf("header %q", v)
+	}
+}
+
+func TestOpenSendsKeytermsHeader(t *testing.T) {
+	srv, f := newServer(t, 0, func(ctx context.Context, c *websocket.Conn, f *fakeServer) {
+		readUntilClose(ctx, c, f)
+		_ = c.Close(websocket.StatusNormalClosure, "")
+	})
+	st, err := testClient(t, srv).Open(context.Background(), "pt", []string{"RAIS", "Entra ID"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.headers[0].Get("x-config-keyterms"); got != "RAIS,Entra ID" {
+		t.Fatalf("header %q", got)
 	}
 }

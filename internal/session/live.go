@@ -23,7 +23,7 @@ type LiveStream interface {
 }
 
 // LiveFunc opens a live stream. onText gets the full partial text after each change.
-type LiveFunc func(ctx context.Context, lang string, onText func(string)) (LiveStream, error)
+type LiveFunc func(ctx context.Context, lang string, keyterms []string, onText func(string)) (LiveStream, error)
 
 // LiveStateEvent tells the HUD how the text arrives now: "live" while the
 // live streams work, "replay" after a live stream failed and its chunk went to
@@ -193,7 +193,7 @@ func (s *Session) runSeg(l *lane, g *liveSeg, lang string) {
 		s.emit(LiveEvent{ID: g.id, Speaker: l.sp, Start: start, Text: t})
 	}
 	var utts []string
-	st, err := s.opts.Live(s.liveCtx, lang, onText)
+	st, err := s.opts.Live(s.liveCtx, lang, s.opts.Keyterms, onText)
 	if err == nil {
 		err = sendFramesTo(st, g.frames)
 		if err == nil {

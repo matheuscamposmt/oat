@@ -161,3 +161,13 @@ func TestWriteRefusesALiveMeeting(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestPromptGivesTheKeyterms(t *testing.T) {
+	meta := store.Meta{Title: "Sync", Keyterms: []string{"RAIS", "Entra ID"}}
+	if p := Prompt(meta, "", segs); !strings.Contains(p, "RAIS, Entra ID") {
+		t.Fatalf("no key terms in the prompt:\n%s", p)
+	}
+	if p := Prompt(store.Meta{Title: "Sync"}, "", segs); strings.Contains(strings.ToLower(p), "key terms") {
+		t.Fatal("key terms line without terms")
+	}
+}

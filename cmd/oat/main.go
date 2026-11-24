@@ -130,8 +130,8 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	}
 	var live session.LiveFunc
 	if claude != nil && cfg.Live {
-		live = func(ctx context.Context, lang string, onText func(string)) (session.LiveStream, error) {
-			st, err := claude.Open(ctx, lang, onText)
+		live = func(ctx context.Context, lang string, keyterms []string, onText func(string)) (session.LiveStream, error) {
+			st, err := claude.Open(ctx, lang, keyterms, onText)
 			if err != nil {
 				return nil, err // not a typed nil in the interface
 			}
