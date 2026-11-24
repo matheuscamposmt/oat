@@ -254,6 +254,31 @@ func (s *Store) Delete(id string) error {
 	return os.RemoveAll(m.Dir)
 }
 
+// Rename changes the title in meta.json and in transcript.md, when it exists.
+// The folder keeps its name. An empty title keeps the old one. It refuses a
+// meeting that a live process records, because that process writes meta.json
+// again when it stops.
+func (s *Store) Rename(id, title string) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil
+	}
+	m, err := s.Load(id)
+	if err != nil {
+		return err
+	}
+	if m.IsLive() {
+		return fmt.Errorf("meeting %s is in use by process %d", id, m.LockPID())
+	}
+	if err := m.Update(func(mm *Meta) { mm.Title = title }); err != nil {
+		return err
+	}
+	if _, err := os.Stat(m.path(transcriptFile)); err != nil {
+		return nil
+	}
+	return m.WriteTranscriptMD()
+}
+
 func (m *Meeting) path(name string) string { return filepath.Join(m.Dir, name) }
 
 // ChunksDir holds the WAV files that wait for the transcription backend.

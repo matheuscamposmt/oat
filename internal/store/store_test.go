@@ -244,3 +244,42 @@ func TestDuration(t *testing.T) {
 		t.Fatalf("ended meeting: %v", d)
 	}
 }
+
+func TestRename(t *testing.T) {
+	st := New(t.TempDir())
+	m := newMeeting(t, st, "Meeting 14:30", t1430)
+	if err := st.Rename(m.Meta.ID, "Sync CVM"); err == nil {
+		t.Fatal("renamed a live meeting")
+	}
+	m.AppendSegments([]Segment{{1, 2, Them, "olá"}})
+	m.WriteTranscriptMD()
+	m.Unlock()
+	if err := st.Rename(m.Meta.ID, "  Sync CVM "); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Load(m.Meta.ID)
+	if err != nil || got.Meta.Title != "Sync CVM" || got.Dir != m.Dir {
+		t.Fatalf("got %+v %v", got, err)
+	}
+	if md, _ := os.ReadFile(filepath.Join(m.Dir, "transcript.md")); !strings.HasPrefix(string(md), "# Sync CVM\n") {
+		t.Fatalf("transcript.md = %q", md)
+	}
+	if err := st.Rename(m.Meta.ID, "   "); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Load(m.Meta.ID); got.Meta.Title != "Sync CVM" {
+		t.Fatalf("an empty title changed it to %q", got.Meta.Title)
+	}
+}
+
+func TestRenameWritesNoTranscriptMD(t *testing.T) {
+	st := New(t.TempDir())
+	m := newMeeting(t, st, "Old", t1430)
+	m.Unlock()
+	if err := st.Rename(m.Meta.ID, "New"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(m.Dir, "transcript.md")); !os.IsNotExist(err) {
+		t.Fatal("rename created transcript.md")
+	}
+}
