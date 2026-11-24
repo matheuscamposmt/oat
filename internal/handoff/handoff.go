@@ -27,8 +27,8 @@ type Target struct {
 // Timeout stops a command that hangs.
 var Timeout = 2 * time.Minute
 
-// NoTargets is the error when config.toml has no [handoff.NAME] table.
-var NoTargets = errors.New("no handoff target. Add a [handoff.NAME] table with a command to config.toml")
+// ErrNoTargets is the error when config.toml has no [handoff.NAME] table.
+var ErrNoTargets = errors.New("no handoff target. Add a [handoff.NAME] table with a command to config.toml")
 
 // Load reads the [handoff.NAME] tables of config.toml in file order.
 // A missing file has no targets.
@@ -78,7 +78,7 @@ func orList(names []string) string {
 // target, or an error that lists the names.
 func Pick(ts []Target, name string) (Target, error) {
 	if len(ts) == 0 {
-		return Target{}, NoTargets
+		return Target{}, ErrNoTargets
 	}
 	if name == "" {
 		if len(ts) == 1 {

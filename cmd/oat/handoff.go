@@ -41,7 +41,7 @@ func runHandoff(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	t, err := handoff.Pick(targets, *to)
-	if errors.Is(err, handoff.NoTargets) {
+	if errors.Is(err, handoff.ErrNoTargets) {
 		return fail(stderr, fmt.Errorf("%w in %s, for example:\n\n%s", err, paths.Config, handoffExample))
 	}
 	if err != nil {
