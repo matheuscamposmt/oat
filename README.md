@@ -25,10 +25,23 @@ Download the static binary for Linux on x86-64:
 ```sh
 curl -fsSL -o ~/.local/bin/oat https://github.com/matheuscamposmt/oat/releases/latest/download/oat-linux-amd64
 chmod +x ~/.local/bin/oat
-oat setup         # registers the MCP server in Claude Code
+```
+
+Then install the Claude Code plugin. In Claude Code, run:
+
+```
+/plugin marketplace add matheuscamposmt/oat
+/plugin install oat@oat
+```
+
+The plugin gives Claude Code the oat MCP server and the `/oat:transcribe` skill. It does not carry the binary, so `oat` must be on your PATH. Then test the setup and record:
+
+```sh
 oat doctor        # tests the audio, the Claude login, and the MCP server
 oat new "Weekly sync"
 ```
+
+Without the plugin, run `oat setup` instead. It registers the MCP server in Claude Code at user scope. Use one of the two, not both: with both, Claude Code runs the server twice. `oat doctor` warns about it, and `claude mcp remove --scope user oat` fixes it.
 
 Or build it from source with `make install` (see [Install](#install)).
 
@@ -60,6 +73,7 @@ Audio chunks go to the voice endpoint at api.anthropic.com (or to Groq, with `tr
 
 - Linux with PipeWire (and its Pulse layer) or PulseAudio
 - `parec` and `pactl`, from the `pulseaudio-utils` package
+- `ffmpeg`, for `oat transcribe` only
 - Go 1.25 or later to build. Go 1.24 downloads 1.25 on its own.
 - Claude Code, logged in with a claude.ai account. With `transcriber = "groq"`, a Groq API key instead.
 
@@ -92,7 +106,7 @@ make install
 oat doctor
 ```
 
-`make install` builds a static binary into `~/.local/bin/oat` and runs `oat setup`, which registers the MCP server in Claude Code at user scope. `oat doctor` checks the audio stack, the Claude login and the voice stream (or the Groq key), the MCP registration, and the data folder. It prints a fix under anything that fails.
+`make install` builds a static binary into `~/.local/bin/oat` and runs `oat setup`, which registers the MCP server in Claude Code at user scope. When the oat plugin is installed, `oat setup` does nothing. `oat doctor` checks the audio stack, the Claude login and the voice stream (or the Groq key), the MCP server, `ffmpeg`, and the data folder. It prints a fix under anything that fails.
 
 `go install github.com/matheuscamposmt/oat/cmd/oat@latest` also works. Run `oat setup` yourself afterwards. With that install, `oat version` prints `dev`.
 
@@ -119,6 +133,21 @@ The notes pane has the focus when the recording starts, so you can type right aw
 After you stop, oat finishes the last chunks and writes the summary. `enter` opens the meeting on its summary, and any other key goes back to the list. If you quit before the chunks are done, the next start of oat finishes them.
 
 In the list, `s` writes the summary of the selected meeting again. In a meeting, `s` switches between the summary and your notes, `y` copies the one on screen, and `r` writes the summary again.
+
+## Transcribe an audio file
+
+```sh
+oat transcribe "WhatsApp Ptt 2026-11-24 at 11.57.06.ogg"
+oat transcribe --keyterms "Entra ID,GST" --lang auto recording.m4a
+```
+
+`oat transcribe` prints the text of an audio file, one paragraph per chunk. It needs `ffmpeg` (`sudo apt install ffmpeg`), which decodes any format it knows. oat cuts the audio at pauses, as in a meeting, and sends up to four chunks at the same time with Claude, two with Groq. Errors and retries go to stderr, and stdout gets the text only when every chunk worked.
+
+`--keyterms` lists names and acronyms, separated by commas, so that the backend spells them right. With the Claude backend, use ASCII only: Claude Code removes accented letters from the terms, so "Vinícius" becomes "Vincius". The list stops at 1024 characters. With `--transcriber groq`, the terms go to the Whisper prompt, and accents are fine.
+
+The flags `--transcriber`, `--lang`, and `--model` work as in `oat new`. The file does not become a meeting.
+
+In Claude Code, the plugin skill `/oat:transcribe` runs this command. It finds the file, builds the key terms from the conversation, and shows the text.
 
 ## Ask Claude about your meetings
 
