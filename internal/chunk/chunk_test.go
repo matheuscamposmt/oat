@@ -197,3 +197,86 @@ func TestEncodeWAV(t *testing.T) {
 		t.Fatalf("WAVDuration = %v, want 1", d)
 	}
 }
+
+type obsLog struct {
+	starts []int64
+	first  []int // frames given with each start
+	frames []int // frames seen for each chunk, including the start frames
+	ends   []bool
+}
+
+func (o *obsLog) ChunkStart(start int64, frames [][]int16) {
+	o.starts = append(o.starts, start)
+	o.first = append(o.first, len(frames))
+	o.frames = append(o.frames, len(frames))
+}
+func (o *obsLog) ChunkFrame(samples []int16, speech bool) { o.frames[len(o.frames)-1]++ }
+func (o *obsLog) ChunkEnd(next bool) {
+	o.ends = append(o.ends, next)
+	if next {
+		o.frames = append(o.frames, 0) // the next chunk continues with no new start
+	}
+}
+
+func TestObserverSeesEachChunk(t *testing.T) {
+	c := New()
+	o := &obsLog{}
+	c.Obs = o
+	var idx int64
+	frames := append(silence(100, false), speech(600)...) // 12 s of speech
+	frames = append(frames, silence(200, false)...)
+	chunks := feed(c, &idx, frames)
+	if len(chunks) != 1 || len(o.starts) != 1 || len(o.ends) != 1 || o.ends[0] {
+		t.Fatalf("chunks %d, starts %v, ends %v", len(chunks), o.starts, o.ends)
+	}
+	ch := chunks[0]
+	if float64(o.starts[0])*FrameSeconds != ch.Start {
+		t.Fatalf("observer start %d, chunk start %v", o.starts[0], ch.Start)
+	}
+	if o.first[0] != prerollFrames+1 {
+		t.Fatalf("the start gave %d frames, want the preroll and one", o.first[0])
+	}
+	if got := o.frames[0] * FrameSamples; got < len(ch.Samples) {
+		t.Fatalf("the observer saw %d samples, fewer than the %d of the chunk", got, len(ch.Samples))
+	}
+}
+
+func TestObserverHardCutContinues(t *testing.T) {
+	c := New()
+	o := &obsLog{}
+	c.Obs = o
+	var idx int64
+	chunks := feed(c, &idx, speech(2000)) // 40 s without a long pause
+	chunks = append(chunks, c.Flush())
+	if len(o.starts) != 1 {
+		t.Fatalf("starts %v: the chunk after a hard cut must continue without a new start", o.starts)
+	}
+	if len(o.ends) != 2 || !o.ends[0] || o.ends[1] {
+		t.Fatalf("ends %v, want [true false]", o.ends)
+	}
+	total := 0
+	for _, n := range o.frames {
+		total += n
+	}
+	if total != 2000 {
+		t.Fatalf("the observer saw %d frames, want each of the 2000 once", total)
+	}
+	if len(chunks) != 2 || chunks[0] == nil || chunks[1] == nil {
+		t.Fatalf("chunks %v", chunks)
+	}
+}
+
+func TestObserverSeesAShortBurst(t *testing.T) {
+	c := New()
+	o := &obsLog{}
+	c.Obs = o
+	var idx int64
+	frames := append(silence(100, false), speech(20)...) // 0.4 s
+	frames = append(frames, silence(200, false)...)
+	if chunks := feed(c, &idx, frames); len(chunks) != 0 {
+		t.Fatalf("got %d chunks for 0.4 s of speech", len(chunks))
+	}
+	if len(o.starts) != 1 || len(o.ends) != 1 {
+		t.Fatalf("starts %v ends %v: the observer must see the dropped burst", o.starts, o.ends)
+	}
+}

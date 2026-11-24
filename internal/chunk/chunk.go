@@ -42,8 +42,24 @@ type frame struct {
 	speech  bool
 }
 
+// Observer sees the frames of each chunk while it grows. The live transcript uses it.
+type Observer interface {
+	// ChunkStart: a chunk starts at the meeting-clock frame index start. frames
+	// holds the preroll and the first speech frame.
+	ChunkStart(start int64, frames [][]int16)
+	// ChunkFrame: one more frame joins the current chunk.
+	ChunkFrame(samples []int16, speech bool)
+	// ChunkEnd: the current chunk ended, also when it had too little speech to
+	// become a Chunk. With next, the chunker keeps the frames after the cut as
+	// the start of the next chunk. The observer saw them already, as frames of
+	// the chunk that ended.
+	ChunkEnd(next bool)
+}
+
 // Chunker holds the VAD and cut state for one stream. It is not safe for concurrent use.
 type Chunker struct {
+	Obs Observer // nil when nobody watches
+
 	levels   []float64 // recent frame levels for the noise floor
 	levelPos int
 	hang     int
@@ -105,9 +121,19 @@ func (c *Chunker) Push(idx int64, samples []int16) *Chunk {
 		c.start = idx - int64(len(c.preroll))
 		c.chunk = append(append([]frame(nil), c.preroll...), f)
 		c.preroll = c.preroll[:0]
+		if c.Obs != nil {
+			frames := make([][]int16, len(c.chunk))
+			for i, cf := range c.chunk {
+				frames[i] = cf.samples
+			}
+			c.Obs.ChunkStart(c.start, frames)
+		}
 		return out
 	}
 	c.chunk = append(c.chunk, f)
+	if c.Obs != nil {
+		c.Obs.ChunkFrame(f.samples, f.speech)
+	}
 	return c.cut()
 }
 
@@ -121,6 +147,9 @@ func (c *Chunker) Flush() *Chunk {
 	keep := min(len(c.chunk), lastSpeech(c.chunk)+1+earlyTail)
 	out := build(c.start, c.chunk[:keep])
 	c.chunk = nil
+	if c.Obs != nil {
+		c.Obs.ChunkEnd(false)
+	}
 	return out
 }
 
@@ -183,7 +212,11 @@ func (c *Chunker) emit(keep int) *Chunk {
 	restStart := c.start + int64(keep)
 	c.chunk = nil
 	c.preroll = c.preroll[:0]
-	if hasSpeech(rest) {
+	next := hasSpeech(rest)
+	if c.Obs != nil {
+		c.Obs.ChunkEnd(next)
+	}
+	if next {
 		c.chunk = rest
 		c.start = restStart
 		return out
