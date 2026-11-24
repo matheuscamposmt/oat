@@ -25,6 +25,18 @@ type LiveStream interface {
 // LiveFunc opens a live stream. onText gets the full partial text after each change.
 type LiveFunc func(ctx context.Context, lang string, onText func(string)) (LiveStream, error)
 
+// LiveStateEvent tells the HUD how the text arrives now: "live" while the
+// live streams work, "replay" after a live stream failed and its chunk went to
+// the queue, and "waiting for login" when the Claude Code token expired.
+type LiveStateEvent struct{ State string }
+
+// The states of LiveStateEvent.
+const (
+	StateLive    = "live"
+	StateReplay  = "replay"
+	StateNoLogin = "waiting for login"
+)
+
 // LiveEvent carries the partial text of a segment that is still open. Done
 // comes when the final segments of that segment are written, or when the live
 // transcript failed and its chunk went to the queue.
@@ -203,12 +215,14 @@ func (s *Session) runSeg(l *lane, g *liveSeg, lang string) {
 		if s.liveCtx.Err() != nil {
 			return // abandoned: the chunk file stays on disk for the next start
 		}
-		s.liveWarn(err)
+		s.setLiveState(stateFor(err))
+		s.liveWarn(err, path != "")
 		if path != "" {
 			s.pipe.Enqueue(path)
 		}
 		return
 	}
+	s.setLiveState(StateLive)
 	dur := float64(g.n) * chunk.FrameSeconds
 	res := stt.Result{Text: strings.Join(utts, " "), Segments: claudestt.Place(utts, dur)}
 	// Done comes after the final lines, so the HUD never shows neither of them.
@@ -251,8 +265,30 @@ func appendPCM(b []byte, f []int16) []byte {
 	return b
 }
 
+// stateFor returns the state after a live failure.
+func stateFor(err error) string {
+	var auth *stt.AuthError
+	if errors.As(err, &auth) || strings.Contains(err.Error(), "login expired") {
+		return StateNoLogin
+	}
+	return StateReplay
+}
+
+// setLiveState emits a LiveStateEvent when the state changes.
+func (s *Session) setLiveState(state string) {
+	s.liveMu.Lock()
+	changed := s.liveStateNow != state
+	s.liveStateNow = state
+	s.liveMu.Unlock()
+	if changed {
+		s.emit(LiveStateEvent{State: state})
+	}
+}
+
 // liveWarn shows a live failure in the HUD, at most once in warnEvery.
-func (s *Session) liveWarn(err error) {
+// queued tells whether a chunk file went to the queue. A part with less than
+// 1 s of speech has no file, so its text is lost.
+func (s *Session) liveWarn(err error, queued bool) {
 	s.liveMu.Lock()
 	now := time.Now()
 	if now.Sub(s.liveWarned) < warnEvery {
@@ -261,16 +297,21 @@ func (s *Session) liveWarn(err error) {
 	}
 	s.liveWarned = now
 	s.liveMu.Unlock()
-	s.emit(transcribe.Warning{Msg: fmt.Sprintf("Live transcript failed (%v). The chunk goes to the queue.", err)})
+	what := "The chunk goes to the queue."
+	if !queued {
+		what = "The part was too short to keep on disk, so its text is lost."
+	}
+	s.emit(transcribe.Warning{Msg: fmt.Sprintf("Live transcript failed (%v). %s", err, what)})
 }
 
 // liveState holds the fields of a Session for the live transcript.
 type liveState struct {
-	liveCtx    context.Context
-	liveCancel context.CancelFunc
-	liveWG     sync.WaitGroup
-	liveMu     sync.Mutex
-	liveID     int64
-	liveWarned time.Time
-	lanes      map[store.Speaker]*lane
+	liveCtx      context.Context
+	liveCancel   context.CancelFunc
+	liveWG       sync.WaitGroup
+	liveMu       sync.Mutex
+	liveID       int64
+	liveWarned   time.Time
+	liveStateNow string
+	lanes        map[store.Speaker]*lane
 }

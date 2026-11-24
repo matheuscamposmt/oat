@@ -209,10 +209,10 @@ func (v viewerModel) View() string {
 	case v.note != "":
 		status = accent.Render("✓ " + v.note)
 	}
-	keys := "tab focus · s summary/notes · y copy · r rewrite summary · e edit notes · esc back"
+	keys := "esc back · s summary/notes · y copy · r rewrite · e edit · tab"
 	if v.summarize == nil {
-		keys = "tab focus · s summary/notes · y copy · e edit notes · esc back"
+		keys = "esc back · s summary/notes · y copy · e edit · tab"
 	}
 	divider := t.style(t.Border).Render(strings.Repeat("─", v.width))
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "  "+status, divider, "  "+dim.Render(keys))
+	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "  "+ansiTrunc(status, v.width-2), divider, "  "+ansiTrunc(dim.Render(keys), v.width-2))
 }

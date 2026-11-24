@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/matheuscamposmt/oat/internal/session"
@@ -340,5 +341,55 @@ func TestRecordWritesTheSummaryAfterTheStop(t *testing.T) {
 	_, cmd = m.Update(key("enter"))
 	if msg, ok := cmd().(openMeetingMsg); !ok || msg.id != asked {
 		t.Fatal("enter did not open the meeting")
+	}
+}
+
+func TestNoLineWiderThanTheScreen(t *testing.T) {
+	for _, w := range []int{60, 80} {
+		m, _ := recording(t, w)
+		m, _ = m.Update(tea.WindowSizeMsg{Width: w, Height: 24})
+		m, _ = m.Update(recEventMsg{session.LiveStateEvent{State: session.StateNoLogin}})
+		m, _ = m.Update(recEventMsg{session.LiveEvent{ID: 1, Speaker: store.Me, Start: 3, Text: "uma frase longa que passa da largura da tela e precisa quebrar a linha"}})
+		for i, l := range strings.Split(m.View(), "\n") {
+			if lw := lipgloss.Width(l); lw > w {
+				t.Errorf("recording at %d columns: line %d has %d cells: %q", w, i, lw, ansi.Strip(l))
+			}
+		}
+		st := store.New(t.TempDir())
+		mt, _ := st.Create("Weekly", time.Now(), "pt", "m", "auto")
+		mt.WriteSummary("# Resumo")
+		mt.Unlock()
+		v, err := newViewerModel(theme, st, mt.Meta.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v.summarize = func(string) error { return nil }
+		v, _ = v.Update(tea.WindowSizeMsg{Width: w, Height: 24})
+		h := newHomeModel(theme, st)
+		h.summarize = func(string) error { return nil }
+		h, _ = h.Update(tea.WindowSizeMsg{Width: w, Height: 24})
+		h, _ = h.Update(loadRows(st)())
+		for i, l := range strings.Split(h.View(), "\n") {
+			if lw := lipgloss.Width(l); lw > w {
+				t.Errorf("list at %d columns: line %d has %d cells: %q", w, i, lw, ansi.Strip(l))
+			}
+		}
+		for i, l := range strings.Split(v.View(), "\n") {
+			if lw := lipgloss.Width(l); lw > w {
+				t.Errorf("viewer at %d columns: line %d has %d cells: %q", w, i, lw, ansi.Strip(l))
+			}
+		}
+	}
+}
+
+func TestHeaderShowsTheLiveState(t *testing.T) {
+	m, _ := recording(t, 120)
+	m, _ = m.Update(recEventMsg{session.LiveStateEvent{State: session.StateLive}})
+	if !strings.Contains(ansi.Strip(m.View()), " live · ") {
+		t.Fatal("no live state")
+	}
+	m, _ = m.Update(recEventMsg{session.LiveStateEvent{State: session.StateReplay}})
+	if v := ansi.Strip(m.View()); !strings.Contains(v, " replay · ") || strings.Contains(v, " live · ") {
+		t.Fatalf("no replay state:\n%s", v)
 	}
 }

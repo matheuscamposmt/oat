@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -136,6 +137,9 @@ func newFileSource(pcm []byte, speed float64) *fileSource {
 	s := &fileSource{frames: make(chan []int16), done: make(chan struct{})}
 	go func() {
 		const n = 320 // 20 ms
+		// A fixed schedule: a sleep per frame adds up and drifts from real time.
+		begin := time.Now()
+		frame := 0
 		for i := 0; i+2*n <= len(pcm); i += 2 * n {
 			f := make([]int16, n)
 			for j := range f {
@@ -146,7 +150,8 @@ func newFileSource(pcm []byte, speed float64) *fileSource {
 			case <-s.done:
 				return
 			}
-			time.Sleep(time.Duration(float64(20*time.Millisecond) / speed))
+			frame++
+			time.Sleep(time.Until(begin.Add(time.Duration(float64(frame) * float64(20*time.Millisecond) / speed))))
 		}
 		<-s.done
 	}()
@@ -174,6 +179,9 @@ func TestLiveSession(t *testing.T) {
 		t.Skip("set OAT_LIVE_ME and OAT_LIVE_THEM")
 	}
 	secs := 120
+	if v := os.Getenv("OAT_LIVE_SECS"); v != "" {
+		fmt.Sscan(v, &secs)
+	}
 	read := func(p string, from int) []byte {
 		b, err := os.ReadFile(p)
 		if err != nil {
@@ -181,7 +189,7 @@ func TestLiveSession(t *testing.T) {
 		}
 		return b[from*32000 : (from+secs)*32000]
 	}
-	me, them := read(mePath, 0), read(themPath, 120)
+	me, them := read(mePath, 0), read(themPath, 0)
 	creds, _ := claudestt.CredentialsPath()
 	cfg := config.Default()
 	cfg.Echo = "off"
@@ -220,6 +228,7 @@ func TestLiveSession(t *testing.T) {
 	}
 	t0 := time.Now()
 	var segs, warnings int
+	firstText := map[int64]float64{} // seconds from the chunk start to its first partial text
 	stopAt := time.After(time.Duration(float64(secs) * float64(time.Second) / speed))
 	for {
 		select {
@@ -232,12 +241,23 @@ func TestLiveSession(t *testing.T) {
 				segs += len(e.Segments)
 			case LiveEvent:
 				liveEvents++
+				if _, seen := firstText[e.ID]; !seen && !e.Done {
+					firstText[e.ID] = time.Since(t0).Seconds() - e.Start
+				}
 			case transcribe.Warning:
 				warnings++
 				t.Logf("warning: %+v", e)
 			case StoppedEvent:
 				t.Logf("stopped after %v, err=%v; %d segments, %d warnings, %d live events", time.Since(t0).Round(time.Second), e.Err, segs, warnings, liveEvents)
 				md, _ := os.ReadFile(filepath.Join(filepath.Dir(s.Meeting().ChunksDir()), "transcript.md"))
+				if len(firstText) > 0 {
+					var d []float64
+					for _, v := range firstText {
+						d = append(d, v)
+					}
+					sort.Float64s(d)
+					t.Logf("chunk start to first partial text: median %.2fs, p90 %.2fs, max %.2fs, %d segments", d[len(d)/2], d[len(d)*9/10], d[len(d)-1], len(d))
+				}
 				t.Logf("transcript.md:\n%s", md)
 				meta := s.Meeting().Snapshot()
 				if e.Err != nil || meta.Status != store.Done || segs == 0 {
@@ -245,7 +265,7 @@ func TestLiveSession(t *testing.T) {
 				}
 				return
 			}
-		case <-time.After(4 * time.Minute):
+		case <-time.After(time.Duration(secs)*time.Second + 2*time.Minute):
 			t.Fatal("no StoppedEvent")
 		}
 	}

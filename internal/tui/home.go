@@ -254,7 +254,7 @@ func (h homeModel) View() string {
 		keys = "enter start recording · esc cancel"
 	}
 	divider := t.style(t.Border).Render(strings.Repeat("─", h.width))
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", strings.Join(lines, "\n"), bottom, divider, "  "+dim.Render(keys))
+	return lipgloss.JoinVertical(lipgloss.Left, header, "", strings.Join(lines, "\n"), ansiTrunc(bottom, h.width), divider, "  "+ansiTrunc(dim.Render(keys), h.width-2))
 }
 
 func (h homeModel) row(r homeRow, selected bool) string {

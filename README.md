@@ -6,7 +6,7 @@
   <img src="docs/hud.png" alt="The oat recording screen: a live transcript on the left and your notes on the right" width="920">
 </p>
 
-oat records any meeting on Linux: Google Meet, Zoom, Teams, or a call in the browser. It captures your microphone and the system audio as two separate streams, so the transcript knows who said what. The words show up in the HUD about a second after they are said, and they get corrected as the speech goes on. You type rough notes next to them. When you stop, Claude Code merges your notes with the transcript into a summary, and oat saves it next to the meeting.
+oat records any meeting on Linux: Google Meet, Zoom, Teams, or a call in the browser. It captures your microphone and the system audio as two separate streams, so the transcript knows who said what. The first words of a phrase show up in the HUD about 2 seconds after the person starts to speak, the rest follows as it is said, and the words get corrected as the speech goes on. You type rough notes next to them. When you stop, Claude Code merges your notes with the transcript into a summary, and oat saves it next to the meeting.
 
 oat needs no new account and no API key. The transcription uses the speech-to-text service of the Claude Code voice mode, with the login that Claude Code already has. The summary runs in Claude Code too. If Claude Code works on your machine, oat works too.
 
@@ -40,7 +40,7 @@ This is an early version. It runs on Linux only and was tested on Pop!_OS 22.04 
 
 `oat new "Title"` starts a recording. Two `parec` processes capture the mic ("Me") and the monitor of your default output ("Them"). The two streams never mix, so the transcript knows who said what.
 
-Each stream is cut at pauses into chunks of 10 to 30 seconds. A chunk opens its own connection to the Claude Code voice stream after half a second of speech, and its audio goes out in real time. The partial text comes back 0.3 to 1 second after the speech, and the HUD shows it dim, with an ellipsis. At the pause, oat closes the connection, gets the final text, and writes it to the transcript. Short noises, such as a key press, open no connection.
+Each stream is cut at pauses into chunks of 10 to 30 seconds. A chunk opens its own connection to the Claude Code voice stream after half a second of speech, and its audio goes out in real time. The first partial text of a chunk comes back about 2 seconds after the speech starts (1.75 s median in tests), and then it follows the speech. The HUD shows it dim, with an ellipsis. At the pause, oat closes the connection, gets the final text, and writes it to the transcript. Short noises, such as a key press, open no connection.
 
 A connection lives for one chunk only. In tests, one connection for a whole meeting returned no final text until it closed, so a failure would lose everything. The server also refuses a sixth connection at the same time, and oat keeps at most four open.
 

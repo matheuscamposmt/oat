@@ -50,6 +50,7 @@ type recordModel struct {
 	segs       []store.Segment
 	live       map[int64]session.LiveEvent // the open live segments, by ID
 	liveSeen   bool
+	liveState  string // from session.LiveStateEvent
 	notes      textarea.Model
 	vp         viewport.Model
 	spin       spinner.Model
@@ -172,6 +173,8 @@ func (m *recordModel) handleEvent(ev any) tea.Cmd {
 			h = h[len(h)-historyLen:]
 		}
 		m.levels[e.Speaker] = h
+	case session.LiveStateEvent:
+		m.liveSeen, m.liveState = true, e.State
 	case session.LiveEvent:
 		m.liveSeen = true
 		if e.Done {
@@ -379,14 +382,17 @@ func (m recordModel) View() string {
 	if m.echoOn {
 		echo = "echo on"
 	}
-	model := shortModel(m.model)
-	if m.liveSeen {
-		model += " live"
+	model := dim.Render(shortModel(m.model))
+	switch {
+	case m.liveState == session.StateReplay || m.liveState == session.StateNoLogin:
+		model += " " + t.style(t.Warn).Render(m.liveState)
+	case m.liveSeen:
+		model += dim.Render(" live")
 	}
-	info := dim.Render(fmt.Sprintf("%s · %s · %s", m.rec.Lang(), model, echo))
+	info := dim.Render(m.rec.Lang()+" · ") + model + dim.Render(" · "+echo)
 	header := Box(t, m.width, accent.Bold(true).Render("oat"), state, []string{Spread(m.title, info, m.width-4)})
 
-	meters := "  " + m.meter(store.Me) + "      " + m.meter(store.Them)
+	meters := ansiTrunc("  "+m.meter(store.Me)+"      "+m.meter(store.Them), m.width)
 
 	body := m.panes()
 	if m.help {
@@ -426,7 +432,7 @@ func (m recordModel) View() string {
 		warn = dim.Render(m.rec.Meeting().Dir)
 	}
 
-	keys := "tab focus · ctrl+b mark · ctrl+p pause · ctrl+l lang · ctrl+s stop · ? help"
+	keys := "ctrl+s stop · ctrl+b mark · ctrl+p pause · ctrl+l lang · tab · ? help"
 	switch {
 	case m.stopped && m.sumState == sumSaved:
 		keys = "enter opens the summary · any other key goes back to the list"
@@ -443,7 +449,7 @@ func (m recordModel) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header, meters, "", body,
 		"  "+ansiTrunc(status, m.width-2), "  "+ansiTrunc(warn, m.width-2),
-		divider, "  "+dim.Render(keys))
+		divider, "  "+ansiTrunc(dim.Render(keys), m.width-2))
 }
 
 func (m recordModel) meter(sp store.Speaker) string {

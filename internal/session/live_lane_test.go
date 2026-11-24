@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/matheuscamposmt/oat/internal/store"
+	"github.com/matheuscamposmt/oat/internal/stt"
 	"github.com/matheuscamposmt/oat/internal/transcribe"
 )
 
@@ -141,10 +142,17 @@ func TestLiveFailureQueuesTheChunk(t *testing.T) {
 				t.Fatal(err)
 			}
 			close(op.gate)
+			var replay bool
 			waitFor(t, s, "a live warning", func(ev any) bool {
+				if e, ok := ev.(LiveStateEvent); ok && e.State == StateReplay {
+					replay = true
+				}
 				w, ok := ev.(transcribe.Warning)
-				return ok && strings.Contains(w.Msg, "Live transcript failed")
+				return ok && strings.Contains(w.Msg, "Live transcript failed") && strings.Contains(w.Msg, "goes to the queue")
 			})
+			if !replay {
+				t.Fatal("no replay state before the warning")
+			}
 			op.waitDrained(t, 2)
 			s.Stop()
 			waitFor(t, s, "StoppedEvent", isStopped)
@@ -233,4 +241,23 @@ func TestStopWaitsForAFailingLiveSegment(t *testing.T) {
 	if fc.count() != 1 {
 		t.Fatalf("the replay client got %d calls, want 1", fc.count())
 	}
+}
+
+func TestExpiredLoginShowsWaitingForLogin(t *testing.T) {
+	o, _, op, _ := setup(t, "off", "[Out] Speaker")
+	fl := &fakeLive{openErr: &stt.TemporaryError{Service: "claude", Err: errors.New("the Claude Code login expired at 10:00")}}
+	o.Live = fl.open
+	op.frames["alsa_input.mic"] = utterance()
+	s, err := Start(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(op.gate)
+	waitFor(t, s, "the waiting-for-login state", func(ev any) bool {
+		e, ok := ev.(LiveStateEvent)
+		return ok && e.State == StateNoLogin
+	})
+	op.waitDrained(t, 2)
+	s.Stop()
+	waitFor(t, s, "StoppedEvent", isStopped)
 }
