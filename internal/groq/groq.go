@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matheuscamposmt/oat/internal/stt"
 )
 
 // DefaultBaseURL is the OpenAI-compatible Groq API.
@@ -35,57 +37,20 @@ func New(key string) *Client {
 	return &Client{BaseURL: DefaultBaseURL, Key: key, HTTP: &http.Client{Timeout: 90 * time.Second}}
 }
 
-// Options are the request fields. An empty or "auto" Language lets Whisper detect it.
-type Options struct {
-	Model    string
-	Language string
-	Prompt   string
-}
+// The request, result, and error types live in package stt. These aliases
+// keep the old names.
+type (
+	Options        = stt.Options
+	Segment        = stt.Segment
+	Result         = stt.Result
+	RateLimitError = stt.RateLimitError
+	AuthError      = stt.AuthError
+	TemporaryError = stt.TemporaryError
+	RequestError   = stt.RequestError
+)
 
-// Segment is one segment of a verbose_json response. Times are seconds from the chunk start.
-type Segment struct {
-	Start            float64 `json:"start"`
-	End              float64 `json:"end"`
-	Text             string  `json:"text"`
-	NoSpeechProb     float64 `json:"no_speech_prob"`
-	CompressionRatio float64 `json:"compression_ratio"`
-	AvgLogprob       float64 `json:"avg_logprob"`
-}
-
-// Result is a verbose_json response.
-type Result struct {
-	Text     string    `json:"text"`
-	Language string    `json:"language"`
-	Segments []Segment `json:"segments"`
-}
-
-// RateLimitError means HTTP 429.
-type RateLimitError struct{ RetryAfter time.Duration }
-
-func (e *RateLimitError) Error() string {
-	return fmt.Sprintf("groq rate limit, retry after %s", e.RetryAfter)
-}
-
-// AuthError means HTTP 401: Groq rejected the key.
-type AuthError struct{ Msg string }
-
-func (e *AuthError) Error() string { return "groq rejected the API key: " + e.Msg }
-
-// TemporaryError means a network error or HTTP 5xx. A retry can work.
-type TemporaryError struct{ Err error }
-
-func (e *TemporaryError) Error() string { return "groq temporary error: " + e.Err.Error() }
-func (e *TemporaryError) Unwrap() error { return e.Err }
-
-// RequestError means another HTTP 4xx. A retry does not help.
-type RequestError struct {
-	Status int
-	Msg    string
-}
-
-func (e *RequestError) Error() string {
-	return fmt.Sprintf("groq refused the request (HTTP %d): %s", e.Status, e.Msg)
-}
+// service is the name in the error messages.
+const service = "groq"
 
 // Transcribe sends one WAV file and returns the verbose_json result.
 func (c *Client) Transcribe(ctx context.Context, wav []byte, opts Options) (Result, error) {
@@ -139,12 +104,12 @@ func (c *Client) do(req *http.Request, out any) error {
 		if ctxErr := req.Context().Err(); ctxErr != nil {
 			return ctxErr
 		}
-		return &TemporaryError{Err: err}
+		return &TemporaryError{Service: service, Err: err}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
-		return &TemporaryError{Err: err}
+		return &TemporaryError{Service: service, Err: err}
 	}
 	switch {
 	case resp.StatusCode == http.StatusOK:
@@ -152,17 +117,17 @@ func (c *Client) do(req *http.Request, out any) error {
 			return nil
 		}
 		if err := json.Unmarshal(data, out); err != nil {
-			return &TemporaryError{Err: fmt.Errorf("decode the response: %w", err)}
+			return &TemporaryError{Service: service, Err: fmt.Errorf("decode the response: %w", err)}
 		}
 		return nil
 	case resp.StatusCode == http.StatusTooManyRequests:
-		return &RateLimitError{RetryAfter: retryAfter(resp.Header.Get("Retry-After"))}
+		return &RateLimitError{Service: service, RetryAfter: retryAfter(resp.Header.Get("Retry-After"))}
 	case resp.StatusCode == http.StatusUnauthorized:
-		return &AuthError{Msg: errorMessage(data)}
+		return &AuthError{Service: service, Msg: errorMessage(data)}
 	case resp.StatusCode >= 500:
-		return &TemporaryError{Err: fmt.Errorf("HTTP %d: %s", resp.StatusCode, errorMessage(data))}
+		return &TemporaryError{Service: service, Err: fmt.Errorf("HTTP %d: %s", resp.StatusCode, errorMessage(data))}
 	default:
-		return &RequestError{Status: resp.StatusCode, Msg: errorMessage(data)}
+		return &RequestError{Service: service, Status: resp.StatusCode, Msg: errorMessage(data)}
 	}
 }
 
