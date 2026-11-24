@@ -173,3 +173,13 @@ func TestLiveDefaultAndFlag(t *testing.T) {
 		t.Fatalf("got %+v %v", cfg, err)
 	}
 }
+
+func TestLoadIgnoresTheHandoffTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("lang = \"en\"\n\n[handoff.techlead]\ncommand = [\"x\", \"{file}\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := Load(path); err != nil || cfg.Lang != "en" {
+		t.Fatalf("got %+v %v", cfg, err)
+	}
+}
