@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -35,6 +36,10 @@ type viewerModel struct {
 	note        string                // a short message, for example after a copy
 	summarize   func(id string) error // nil turns the summary off
 	writing     bool
+	handoff     func(id, target string) error // see Deps.Handoff
+	targets     []string
+	asking      bool   // o asks y/n, or shows the targets
+	handingTo   string // the target while the handoff runs
 }
 
 func newViewerModel(t Theme, st *store.Store, id string) (viewerModel, error) {
@@ -83,6 +88,18 @@ func (v viewerModel) Update(msg tea.Msg) (viewerModel, tea.Cmd) {
 		v.showSummary, v.note = true, "Summary saved."
 		v.layout()
 		return v, nil
+	case handoffDoneMsg:
+		if msg.id != v.meta.ID {
+			return v, nil
+		}
+		v.handingTo = ""
+		if msg.err != nil {
+			first, _, _ := strings.Cut(msg.err.Error(), "\n")
+			v.err = "The handoff to " + msg.target + " failed: " + first
+			return v, nil
+		}
+		v.note = "Sent to " + msg.target + "."
+		return v, nil
 	}
 	if v.editing {
 		var cmd tea.Cmd
@@ -114,6 +131,22 @@ func (v viewerModel) key(k tea.KeyPressMsg) (viewerModel, tea.Cmd) {
 		var cmd tea.Cmd
 		v.rename, cmd = v.rename.Update(k)
 		return v, cmd
+	}
+	if v.asking {
+		v.asking = false
+		target := ""
+		if len(v.targets) == 1 && (key == "y" || key == "Y") {
+			target = v.targets[0]
+		}
+		if len(v.targets) > 1 && len(key) == 1 && key[0] >= '1' && int(key[0]-'0') <= len(v.targets) {
+			target = v.targets[key[0]-'1']
+		}
+		if target == "" {
+			return v, nil
+		}
+		v.handingTo = target
+		fn, id := v.handoff, v.meta.ID
+		return v, func() tea.Msg { return handoffDoneMsg{id: id, target: target, err: fn(id, target)} }
 	}
 	if v.editing {
 		if key == "esc" {
@@ -157,6 +190,18 @@ func (v viewerModel) key(k tea.KeyPressMsg) (viewerModel, tea.Cmd) {
 		}
 		v.writing, v.err, v.note = true, "", ""
 		return v, summarizeCmd(v.summarize, v.meta.ID)
+	case "o":
+		v.err, v.note = "", ""
+		switch {
+		case v.handingTo != "":
+		case v.handoff == nil || len(v.targets) == 0:
+			v.err = "No handoff target. Add [handoff.NAME] with a command to config.toml."
+		case strings.TrimSpace(v.summary) == "":
+			v.err = "No summary to hand off. Write it first with r or oat summary."
+		default:
+			v.asking = true
+		}
+		return v, nil
 	case "y":
 		text := v.notesText
 		what := "notes"
@@ -233,6 +278,16 @@ func (v viewerModel) View() string {
 	switch {
 	case v.renaming:
 		status = v.rename.View()
+	case v.asking && len(v.targets) == 1:
+		status = accent.Render("Hand off to " + v.targets[0] + "? y/n")
+	case v.asking:
+		var opts []string
+		for i, name := range v.targets {
+			opts = append(opts, fmt.Sprintf("%d %s", i+1, name))
+		}
+		status = accent.Render("Hand off to: " + strings.Join(opts, " · ") + " · esc cancel")
+	case v.handingTo != "":
+		status = dim.Render("Handing off to " + v.handingTo + "…")
 	case v.err != "":
 		status = t.style(t.Err).Render("! " + v.err)
 	case v.writing:
@@ -240,9 +295,9 @@ func (v viewerModel) View() string {
 	case v.note != "":
 		status = accent.Render("✓ " + v.note)
 	}
-	keys := "esc back · s summary/notes · y copy · r rewrite · e edit · t title · tab"
+	keys := "esc back · s summary/notes · y copy · r rewrite · e edit · t title · o hand off · tab"
 	if v.summarize == nil {
-		keys = "esc back · s summary/notes · y copy · e edit · t title · tab"
+		keys = "esc back · s summary/notes · y copy · e edit · t title · o hand off · tab"
 	}
 	if v.renaming {
 		keys = "enter save · esc cancel"

@@ -26,6 +26,7 @@ import (
 	"github.com/matheuscamposmt/oat/internal/config"
 	"github.com/matheuscamposmt/oat/internal/doctor"
 	"github.com/matheuscamposmt/oat/internal/groq"
+	"github.com/matheuscamposmt/oat/internal/handoff"
 	"github.com/matheuscamposmt/oat/internal/keyterms"
 	"github.com/matheuscamposmt/oat/internal/mcpserver"
 	"github.com/matheuscamposmt/oat/internal/session"
@@ -153,6 +154,10 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	if _, err := keyterms.Pick(lists, *set, ""); err != nil {
 		return fail(stderr, err)
 	}
+	targets, err := handoff.Load(paths.Config)
+	if err != nil {
+		return fail(stderr, err)
+	}
 	client, claude, err := newClient(cfg, paths)
 	if err != nil {
 		return fail(stderr, err)
@@ -211,8 +216,21 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 			session.Drain(ctx, st, client, cfg, emit)
 		},
 		Summarize: summarizer(cfg),
-		AutoStart: isNew,
-		NewTitle:  title,
+		Handoff: func(id, name string) error {
+			t, err := handoff.Pick(targets, name)
+			if err != nil {
+				return err
+			}
+			m, err := st.Load(id)
+			if err != nil {
+				return err
+			}
+			_, err = handoff.Send(ctx, m, t)
+			return err
+		},
+		HandoffTargets: handoff.Names(targets),
+		AutoStart:      isNew,
+		NewTitle:       title,
 	}
 	if err := tui.Run(ctx, deps); err != nil {
 		return fail(stderr, err)

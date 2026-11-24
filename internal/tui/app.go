@@ -28,6 +28,10 @@ type Deps struct {
 	// Summarize writes summary.md for a meeting and blocks until it is done.
 	// nil turns the summary off.
 	Summarize func(id string) error
+	// Handoff sends the summary of a meeting to the target with the name,
+	// and blocks until the command ends. HandoffTargets are the names.
+	Handoff        func(id, target string) error
+	HandoffTargets []string
 	// AutoStart begins a recording with NewTitle at once (oat new).
 	AutoStart bool
 	NewTitle  string
@@ -141,6 +145,7 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openMeetingMsg:
 		v, err := newViewerModel(a.deps.Theme, a.deps.Store, msg.id)
 		v.summarize = a.deps.Summarize
+		v.handoff, v.targets = a.deps.Handoff, a.deps.HandoffTargets
 		if a.recOn && a.rec.stopped {
 			a.recOn = false // the recording is over, so n can start a new one
 		}
