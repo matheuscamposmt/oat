@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,5 +72,59 @@ func TestMeetingKeytermsPickTheListByTitle(t *testing.T) {
 	got, err := keytermsFor(lists, "GST, Entra ID", "", "Sync da CVM")
 	if err != nil || !strings.HasPrefix(strings.Join(got, ","), "GST,Entra ID,RAIS,Sync,CVM,MCP,") {
 		t.Fatalf("got %q %v", got, err)
+	}
+}
+
+func runOK(t *testing.T, args ...string) string {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	if code := run(args, &out, &errOut); code != 0 {
+		t.Fatalf("%v: got %d %q", args, code, errOut.String())
+	}
+	return out.String()
+}
+
+func TestKeytermsAddAndRemove(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := writeConfig(t, "# my settings\nlang = \"en\"\n")
+	runOK(t, "keyterms", "add", "cvm", "RAIS")
+	runOK(t, "keyterms", "add", "cvm", "Entra ID", "rais", "DBeaver")
+	runOK(t, "keyterms", "rm", "cvm", "dbeaver")
+	data, _ := os.ReadFile(path)
+	if string(data) != "# my settings\nlang = \"en\"\n\n[keyterms.cvm]\nterms = [\"Entra ID\", \"RAIS\"]\n" {
+		t.Fatalf("config:\n%s", data)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"keyterms", "rm", "none", "X"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), `no key term list "none"`) {
+		t.Fatalf("rm from a missing list: %d %q", code, errOut.String())
+	}
+}
+
+func TestKeytermsList(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if out := runOK(t, "keyterms", "list"); !strings.Contains(out, "No key term lists") {
+		t.Fatalf("no lists: %q", out)
+	}
+	writeConfig(t, "[keyterms.cvm]\nfolder = \"/src/cvm\"\nterms = [\"RAIS\", \"Vinícius\"]\n[keyterms.nexo]\nterms = [\"NEXO\"]\n")
+	out := runOK(t, "keyterms", "list")
+	if !strings.Contains(out, "cvm") || !strings.Contains(out, "2 terms") || !strings.Contains(out, "/src/cvm") || !strings.Contains(out, "nexo") {
+		t.Fatalf("lists: %q", out)
+	}
+	out = runOK(t, "keyterms", "list", "cvm")
+	for _, want := range []string{"RAIS", "list cvm", "MCP", "base", "Vinícius"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in %q", want, out)
+		}
+	}
+	if !strings.Contains(out, "accent") || strings.Contains(out, "limit") {
+		t.Fatalf("warnings: %q", out)
+	}
+	var many []string
+	for i := range 55 {
+		many = append(many, fmt.Sprintf("\"T%d\"", i))
+	}
+	writeConfig(t, "[keyterms.big]\nterms = ["+strings.Join(many, ", ")+"]\n")
+	if out := runOK(t, "keyterms", "list", "big"); !strings.Contains(out, "limit") || !strings.Contains(out, "T54") {
+		t.Fatalf("limit warning: %q", out)
 	}
 }

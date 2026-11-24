@@ -78,6 +78,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runSummary(args, stdout, stderr)
 	case "transcribe":
 		return runTranscribe(args, stdout, stderr)
+	case "keyterms":
+		return runKeyterms(args, stdout, stderr)
 	case "doctor":
 		return runDoctor(stdout, stderr)
 	case "setup":
