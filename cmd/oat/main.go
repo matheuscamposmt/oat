@@ -363,7 +363,7 @@ func runDoctor(stdout, stderr io.Writer) int {
 			}
 			return claudestt.New(path, "oat/"+version).Ping(ctx)
 		},
-		MCPStatus: func(ctx context.Context) error {
+		MCPStatus: func(ctx context.Context) (doctor.MCPState, error) {
 			return doctor.MCPStatus(ctx, audio.Exec, exec.LookPath)
 		},
 		FFmpeg:  func() (string, error) { return exec.LookPath(ffmpegPath) },

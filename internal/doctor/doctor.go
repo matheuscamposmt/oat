@@ -41,8 +41,8 @@ type Deps struct {
 	ExpiryMargin time.Duration
 	// AutoSummary is on when oat writes a summary after each meeting with claude -p.
 	AutoSummary bool
-	MCPStatus   func(ctx context.Context) error // nil when Claude Code knows the oat server
-	FFmpeg      func() (string, error)          // the path of ffmpeg, which only oat transcribe needs
+	MCPStatus   func(ctx context.Context) (MCPState, error)
+	FFmpeg      func() (string, error) // the path of ffmpeg, which only oat transcribe needs
 	DataDir     string
 	Echo        *audio.Echo
 }
@@ -102,11 +102,7 @@ func Run(ctx context.Context, d Deps) []Result {
 		add(Result{Name: "ffmpeg", OK: true, Detail: p})
 	}
 
-	if err := d.MCPStatus(ctx); err != nil {
-		add(Result{Name: "MCP server", Detail: err.Error(), Fix: "Run: oat setup"})
-	} else {
-		add(Result{Name: "MCP server", OK: true, Detail: "registered in Claude Code as oat"})
-	}
+	add(mcpResult(d.MCPStatus(ctx)))
 
 	if err := writable(d.DataDir); err != nil {
 		add(Result{Name: "Data folder", Detail: err.Error(), Fix: "Make sure that you can write to " + d.DataDir})
@@ -123,6 +119,21 @@ func Run(ctx context.Context, d Deps) []Result {
 		add(Result{Name: "Echo cancel", OK: true, Detail: "no module left behind"})
 	}
 	return rs
+}
+
+func mcpResult(st MCPState, err error) Result {
+	const fix = "Install the oat plugin, or run: oat setup"
+	switch {
+	case err != nil:
+		return Result{Name: "MCP server", Detail: err.Error(), Fix: fix}
+	case st.User && st.Plugin:
+		return Result{Name: "MCP server", Detail: "registered twice: by oat setup and by the oat plugin", Fix: "claude mcp remove --scope user oat"}
+	case st.Plugin:
+		return Result{Name: "MCP server", OK: true, Detail: "provided by the oat plugin"}
+	case st.User:
+		return Result{Name: "MCP server", OK: true, Detail: "registered in Claude Code as oat"}
+	}
+	return Result{Name: "MCP server", Detail: "Claude Code does not know the oat server", Fix: fix}
 }
 
 func groqChecks(ctx context.Context, d Deps) []Result {

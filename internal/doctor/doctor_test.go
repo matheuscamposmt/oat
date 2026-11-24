@@ -32,7 +32,7 @@ func deps(t *testing.T) Deps {
 		Transcriber: "groq",
 		GroqKey:     func() (string, string, error) { return "gsk_abcdefgh1234", "/home/u/.config/oat/config.toml", nil },
 		Ping:        func(ctx context.Context, key string) error { return nil },
-		MCPStatus:   func(ctx context.Context) error { return nil },
+		MCPStatus:   func(ctx context.Context) (MCPState, error) { return MCPState{User: true}, nil },
 		FFmpeg:      func() (string, error) { return "/usr/bin/ffmpeg", nil },
 		DataDir:     filepath.Join(t.TempDir(), "oat"),
 		Echo:        &audio.Echo{Pactl: pactl, StatePath: filepath.Join(t.TempDir(), "echo.json")},
@@ -86,13 +86,13 @@ func TestFailuresHaveFixes(t *testing.T) {
 		return "/usr/bin/" + s, nil
 	}
 	d.Ping = func(ctx context.Context, key string) error { return errors.New("groq rejected the API key") }
-	d.MCPStatus = func(ctx context.Context) error { return errors.New("oat is not registered") }
+	d.MCPStatus = func(ctx context.Context) (MCPState, error) { return MCPState{}, nil }
 	var buf bytes.Buffer
 	if Print(&buf, Run(context.Background(), d)) {
 		t.Fatal("Print reported success")
 	}
 	out := buf.String()
-	for _, want := range []string{"✗ parec", "sudo apt install pulseaudio-utils", "✗ Groq API", "✗ MCP server", "fix: Run: oat setup"} {
+	for _, want := range []string{"✗ parec", "sudo apt install pulseaudio-utils", "✗ Groq API", "✗ MCP server", "fix: Install the oat plugin, or run: oat setup"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
@@ -114,14 +114,14 @@ func (r *runLog) run(ctx context.Context, name string, args ...string) (string, 
 }
 
 func TestSetupRegisters(t *testing.T) {
-	r := &runLog{fail: map[string]bool{"claude mcp get oat": true}}
+	r := &runLog{fail: map[string]bool{"claude mcp get oat": true, "claude mcp get plugin:oat:oat": true}}
 	var buf bytes.Buffer
 	err := Setup(context.Background(), r.run, func(string) (string, error) { return "/usr/bin/claude", nil }, "/home/u/.local/bin/oat", &buf)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "claude mcp add --scope user oat -- /home/u/.local/bin/oat mcp"
-	if len(r.calls) != 2 || r.calls[1] != want {
+	if len(r.calls) != 3 || r.calls[2] != want {
 		t.Fatalf("calls %v", r.calls)
 	}
 }
@@ -259,5 +259,60 @@ func TestFFmpegIsOptional(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Install ffmpeg to use oat transcribe: sudo apt install ffmpeg") {
 		t.Fatalf("no fix in:\n%s", buf.String())
+	}
+}
+
+func TestSetupSkipsWhenThePluginIsInstalled(t *testing.T) {
+	r := &runLog{fail: map[string]bool{"claude mcp get oat": true}}
+	var buf bytes.Buffer
+	if err := Setup(context.Background(), r.run, func(string) (string, error) { return "/usr/bin/claude", nil }, "/bin/oat", &buf); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range r.calls {
+		if strings.Contains(c, "mcp add") {
+			t.Fatalf("calls %v", r.calls)
+		}
+	}
+	if !strings.Contains(buf.String(), "plugin provides") {
+		t.Fatalf("out %q", buf.String())
+	}
+}
+
+// mcpRow runs doctor with the MCP servers in exist known to Claude Code.
+func mcpRow(t *testing.T, exist ...string) Result {
+	t.Helper()
+	r := &runLog{fail: map[string]bool{"claude mcp get oat": true, "claude mcp get plugin:oat:oat": true}}
+	for _, name := range exist {
+		delete(r.fail, "claude mcp get "+name)
+	}
+	d := deps(t)
+	d.MCPStatus = func(ctx context.Context) (MCPState, error) {
+		return MCPStatus(ctx, r.run, func(string) (string, error) { return "/usr/bin/claude", nil })
+	}
+	return byName(Run(context.Background(), d))["MCP server"]
+}
+
+func TestMCPStatusPluginOnly(t *testing.T) {
+	if r := mcpRow(t, PluginServer); !r.OK || r.Detail != "provided by the oat plugin" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestMCPStatusUserOnly(t *testing.T) {
+	if r := mcpRow(t, "oat"); !r.OK || r.Detail != "registered in Claude Code as oat" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestMCPStatusBoth(t *testing.T) {
+	r := mcpRow(t, "oat", PluginServer)
+	if r.OK || r.Detail != "registered twice: by oat setup and by the oat plugin" || r.Fix != "claude mcp remove --scope user oat" {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestMCPStatusNone(t *testing.T) {
+	if r := mcpRow(t); r.OK || r.Fix != "Install the oat plugin, or run: oat setup" {
+		t.Fatalf("%+v", r)
 	}
 }
