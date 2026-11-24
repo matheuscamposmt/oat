@@ -155,3 +155,25 @@ terms = ["RAIS", "LabContas", "Entra ID"]
 
 - No automatic update of the lists from the summaries in this change.
 - The scan reads descriptive files and names, not the whole code, to keep it short and cheap.
+
+## Addendum: rename a meeting and hand it to a bot (2026-11-24)
+
+The user wants to fix a meeting title after the fact, and to pass a summary to another agent (an Orca bot today, maybe a webhook later) without copy and paste. The owner asked for the simplest version of both.
+
+### Rename
+
+- `t` opens a text field with the title, in the list and in a meeting. No screen used `t`, and the viewport of the meeting screen does not bind it. `enter` saves, `esc` cancels, an empty title keeps the old one.
+- `Store.Rename` writes `meta.json` and rewrites `transcript.md` when it exists, because its heading is the title. The folder and the ID stay. The MCP tools read `meta.json` on each call, so they show the new title with no change.
+- `summary.md` keeps its first heading. It is the text Claude wrote, and the title in `meta.json` is the one oat shows.
+- oat refuses to rename a meeting while a process records it. That process holds the metadata in memory and writes it again when it stops, so it would put the old title back.
+
+### Handoff
+
+- Targets are `[handoff.NAME]` tables with one key, `command`, an argv list. They load in file order, like the key term lists. An empty command is an error when the file loads.
+- `oat handoff [ID] [--to NAME] [--dry-run]`. Flags can come before or after the ID, as in `oat new`, so `oat handoff ID --dry-run` never runs the command by mistake.
+- The file is `<ID>.md` in a new folder from `os.MkdirTemp` (mode 700, the file 600): the title as a heading, `Date:`, `Meeting:`, then `summary.md` as it is. oat deletes the folder after the command ends. `--dry-run` keeps it, so the printed path exists.
+- `{file}`, `{title}`, `{date}` and `{meeting}` are replaced in one pass in each argument, so `@{file}` works for curl and a title that contains `{file}` is not replaced again. `{date}` is the start in `2006-01-02 15:04`, the format of the rest of oat.
+- No shell, a 2 minute timeout. A failed command gives its stderr as the error. The CLI prints it and exits 1. The meeting screen shows its first line.
+- In the meeting screen the key is `o`. With one target it asks y/n. With more, it lists them by number, `1` to `9`. The list screen has no key for it.
+- Not in this change: an automatic handoff after the summary, adapters for each platform, a record of past handoffs.
+- The plugin skills do not name a command where `oat handoff` fits, so the plugin did not change.
