@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/matheuscamposmt/oat/internal/filetx"
 	"math"
 	"os"
 	"path/filepath"
@@ -115,9 +116,16 @@ func TestTranscribePrintsParagraphs(t *testing.T) {
 	if err := os.WriteFile(pcm, bytes.Join([][]byte{tone(11), make([]byte, 2*2*chunk.SampleRate), tone(13)}, nil), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fakeFFmpeg(t, "cat '"+pcm+"'", textBySeconds{11: "one", 13: "two"})
+	fakeFFmpeg(t, "cat '"+pcm+"'", textBySeconds{11: "One.", 13: "two"})
 	var out, errOut bytes.Buffer
-	if code := run([]string{"transcribe", audioFile(t, "a.ogg")}, &out, &errOut); code != 0 || out.String() != "one\n\ntwo\n" {
+	if code := run([]string{"transcribe", audioFile(t, "a.ogg")}, &out, &errOut); code != 0 || out.String() != "One.\n\ntwo\n" {
 		t.Fatalf("got %d %q %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestJoinParagraphsKeepsASentenceTogether(t *testing.T) {
+	got := joinParagraphs([]filetx.Paragraph{{Text: "a questão de login do Entra ID, se a"}, {Text: "gente vai pôr. Sim."}, {Text: "Outra."}})
+	if got != "a questão de login do Entra ID, se a gente vai pôr. Sim.\n\nOutra." {
+		t.Fatalf("got %q", got)
 	}
 }

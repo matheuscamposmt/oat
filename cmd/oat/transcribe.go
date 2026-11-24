@@ -107,12 +107,24 @@ func runTranscribe(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "oat: ffmpeg could not decode %s: %v\n%s", path, waitErr, ffErr.String())
 		return 1
 	}
-	texts := make([]string, len(paras))
-	for i, p := range paras {
-		texts[i] = p.Text
-	}
-	if len(texts) > 0 {
-		fmt.Fprintln(stdout, strings.Join(texts, "\n\n"))
+	if len(paras) > 0 {
+		fmt.Fprintln(stdout, joinParagraphs(paras))
 	}
 	return 0
+}
+
+// joinParagraphs starts a new paragraph only after a sentence end, because a chunk cut can fall mid-sentence.
+func joinParagraphs(paras []filetx.Paragraph) string {
+	var b strings.Builder
+	for i, p := range paras {
+		if i > 0 {
+			if strings.ContainsAny(paras[i-1].Text[len(paras[i-1].Text)-1:], ".!?…") {
+				b.WriteString("\n\n")
+			} else {
+				b.WriteString(" ")
+			}
+		}
+		b.WriteString(p.Text)
+	}
+	return b.String()
 }

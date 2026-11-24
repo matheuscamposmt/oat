@@ -7,7 +7,7 @@ allowed-tools: Bash
 # Transcribe an audio file
 
 1. Find the path of the audio file in the arguments or in the conversation. If the user names a folder and a time, such as "the WhatsApp audio of today in Downloads", list the folder and pick the file. Quote the path, because it can have spaces.
-2. Build the key terms from the conversation and the project: proper names, acronyms, product names, and system names. The default backend is Claude, and it drops accented letters from the terms, so leave out names with accents. With `--transcriber groq`, accents are fine. Use at most about 30 terms.
+2. Build the key terms only from words that appear in the conversation or in the project: proper names, acronyms, product names, and system names. Do not add related terms that nobody wrote. The default backend is Claude, and it drops accented letters from the terms, so leave out names with accents. With `--transcriber groq`, accents are fine. Use at most about 30 terms.
 3. Run:
 
    ```sh
