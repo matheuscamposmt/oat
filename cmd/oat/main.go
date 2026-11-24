@@ -40,6 +40,7 @@ Usage:
   oat                  open the list of meetings
   oat new [title]      start a recording now
   oat summary [id]     write summary.md with Claude Code (default: the latest meeting)
+  oat transcribe FILE  print the text of an audio file
   oat mcp              run the MCP server (Claude Code starts it)
   oat doctor           test the environment
   oat setup            register the MCP server in Claude Code
@@ -52,6 +53,12 @@ Flags for oat and oat new:
   --model NAME     Groq only: whisper-large-v3-turbo or whisper-large-v3
   --echo MODE      echo cancel: auto, on, or off
   --keep-audio     keep the WAV chunks in the meeting folder
+
+Flags for oat transcribe:
+  --transcriber S  claude or groq
+  --lang CODE      pt, en, or auto
+  --model NAME     Groq only
+  --keyterms LIST  names and acronyms, separated by commas
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -68,6 +75,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runMCP(stderr)
 	case "summary":
 		return runSummary(args, stdout, stderr)
+	case "transcribe":
+		return runTranscribe(args, stdout, stderr)
 	case "doctor":
 		return runDoctor(stdout, stderr)
 	case "setup":
@@ -357,6 +366,7 @@ func runDoctor(stdout, stderr io.Writer) int {
 		MCPStatus: func(ctx context.Context) error {
 			return doctor.MCPStatus(ctx, audio.Exec, exec.LookPath)
 		},
+		FFmpeg:  func() (string, error) { return exec.LookPath(ffmpegPath) },
 		DataDir: paths.Data,
 		Echo:    &audio.Echo{Pactl: pactl, StatePath: paths.EchoState()},
 	})

@@ -33,6 +33,7 @@ func deps(t *testing.T) Deps {
 		GroqKey:     func() (string, string, error) { return "gsk_abcdefgh1234", "/home/u/.config/oat/config.toml", nil },
 		Ping:        func(ctx context.Context, key string) error { return nil },
 		MCPStatus:   func(ctx context.Context) error { return nil },
+		FFmpeg:      func() (string, error) { return "/usr/bin/ffmpeg", nil },
 		DataDir:     filepath.Join(t.TempDir(), "oat"),
 		Echo:        &audio.Echo{Pactl: pactl, StatePath: filepath.Join(t.TempDir(), "echo.json")},
 	}
@@ -243,5 +244,20 @@ func TestSummaryNeedsClaude(t *testing.T) {
 	}
 	if r := byName(Run(context.Background(), d))["Summary"]; r.OK || !strings.Contains(r.Fix, "auto_summary = false") {
 		t.Fatalf("Summary %+v", r)
+	}
+}
+
+func TestFFmpegIsOptional(t *testing.T) {
+	d := deps(t)
+	if r := byName(Run(context.Background(), d))["ffmpeg"]; !r.OK || r.Detail != "/usr/bin/ffmpeg" {
+		t.Fatalf("ffmpeg %+v", r)
+	}
+	d.FFmpeg = func() (string, error) { return "", errors.New("not found") }
+	var buf bytes.Buffer
+	if !Print(&buf, Run(context.Background(), d)) {
+		t.Fatalf("a missing ffmpeg failed doctor:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "Install ffmpeg to use oat transcribe: sudo apt install ffmpeg") {
+		t.Fatalf("no fix in:\n%s", buf.String())
 	}
 }

@@ -20,6 +20,8 @@ type Result struct {
 	OK     bool
 	Detail string
 	Fix    string
+	// Optional marks a test whose failure does not fail doctor.
+	Optional bool
 }
 
 // Deps holds the functions that the tests call. Tests replace them.
@@ -40,6 +42,7 @@ type Deps struct {
 	// AutoSummary is on when oat writes a summary after each meeting with claude -p.
 	AutoSummary bool
 	MCPStatus   func(ctx context.Context) error // nil when Claude Code knows the oat server
+	FFmpeg      func() (string, error)          // the path of ffmpeg, which only oat transcribe needs
 	DataDir     string
 	Echo        *audio.Echo
 }
@@ -91,6 +94,12 @@ func Run(ctx context.Context, d Deps) []Result {
 		} else {
 			add(Result{Name: "Summary", OK: true, Detail: "written after each meeting by " + p + " -p"})
 		}
+	}
+
+	if p, err := d.FFmpeg(); err != nil {
+		add(Result{Name: "ffmpeg", Optional: true, Detail: "not found", Fix: "Install ffmpeg to use oat transcribe: sudo apt install ffmpeg"})
+	} else {
+		add(Result{Name: "ffmpeg", OK: true, Detail: p})
 	}
 
 	if err := d.MCPStatus(ctx); err != nil {
@@ -151,12 +160,15 @@ func claudeChecks(ctx context.Context, d Deps) []Result {
 	return append(rs, Result{Name: "Claude voice", OK: true, Detail: "the voice stream accepts the token"})
 }
 
-// Print writes the results and returns true when all tests passed.
+// Print writes the results and returns true when all tests that are not optional passed.
 func Print(w io.Writer, rs []Result) bool {
 	ok := true
 	for _, r := range rs {
 		mark := "✓"
-		if !r.OK {
+		switch {
+		case !r.OK && r.Optional:
+			mark = "!"
+		case !r.OK:
 			mark, ok = "✗", false
 		}
 		fmt.Fprintf(w, "%s %-16s %s\n", mark, r.Name, r.Detail)
