@@ -25,6 +25,9 @@ type Deps struct {
 	Start func(ctx context.Context, title string) (Recorder, error)
 	// Drain sends leftover chunks in the background. It can be nil.
 	Drain func(ctx context.Context, emit func(any))
+	// Summarize writes summary.md for a meeting and blocks until it is done.
+	// nil turns the summary off.
+	Summarize func(id string) error
 	// AutoStart begins a recording with NewTitle at once (oat new).
 	AutoStart bool
 	NewTitle  string
@@ -62,6 +65,7 @@ type app struct {
 
 func newApp(ctx context.Context, d Deps) app {
 	a := app{deps: d, ctx: ctx, home: newHomeModel(d.Theme, d.Store), drainCh: make(chan any, 256)}
+	a.home.summarize = d.Summarize
 	if d.AutoStart {
 		// Init cannot change the model, so mark the AutoStart start here.
 		a.starting, a.home.starting = true, true
@@ -123,6 +127,7 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		a.rec = newRecordModel(a.deps.Theme, msg.rec)
+		a.rec.summarize = a.deps.Summarize
 		a.recOn, a.screen = true, recordScreen
 		a.rec, _ = a.rec.Update(a.size())
 		return a, a.rec.Init()
@@ -135,6 +140,10 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case openMeetingMsg:
 		v, err := newViewerModel(a.deps.Theme, a.deps.Store, msg.id)
+		v.summarize = a.deps.Summarize
+		if a.recOn && a.rec.stopped {
+			a.recOn = false // the recording is over, so n can start a new one
+		}
 		if err != nil {
 			a.home.err = err.Error()
 			return a, nil
@@ -142,6 +151,19 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.view, _ = v.Update(a.size())
 		a.screen = viewerScreen
 		return a, nil
+	case summaryDoneMsg:
+		// The summary can end on any screen, so each one sees it.
+		delete(a.home.writing, msg.id)
+		if msg.err != nil && a.screen == homeScreen {
+			a.home.err = "The summary failed: " + msg.err.Error()
+		}
+		if a.recOn {
+			a.rec, _ = a.rec.Update(msg)
+		}
+		if a.screen == viewerScreen {
+			a.view, _ = a.view.Update(msg)
+		}
+		return a, loadRows(a.deps.Store)
 	case backHomeMsg:
 		// A message from another screen is stale, for example the 4 s timer
 		// of a stopped recording after the user opened the viewer.
@@ -193,6 +215,10 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch a.screen {
 	case recordScreen:
 		a.rec, cmd = a.rec.Update(msg)
+		if a.rec.sumState == sumWriting {
+			// The list must know, so s does not start a second summary.
+			a.home.writing[a.rec.rec.Meeting().Snapshot().ID] = true
+		}
 	case viewerScreen:
 		a.view, cmd = a.view.Update(msg)
 	default:

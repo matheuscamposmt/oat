@@ -14,6 +14,7 @@ import (
 
 type viewerModel struct {
 	theme       Theme
+	st          *store.Store
 	m           *store.Meeting
 	meta        store.Meta
 	segs        []store.Segment
@@ -28,6 +29,9 @@ type viewerModel struct {
 	width       int
 	height      int
 	err         string
+	note        string                // a short message, for example after a copy
+	summarize   func(id string) error // nil turns the summary off
+	writing     bool
 }
 
 func newViewerModel(t Theme, st *store.Store, id string) (viewerModel, error) {
@@ -45,8 +49,9 @@ func newViewerModel(t Theme, st *store.Store, id string) (viewerModel, error) {
 	ed.ShowLineNumbers = false
 	ed.Prompt = ""
 	return viewerModel{
-		theme: t, m: m, meta: m.Meta, segs: store.Clean(segs), notesText: notes, summary: summary,
+		theme: t, st: st, m: m, meta: m.Meta, segs: store.Clean(segs), notesText: notes, summary: summary,
 		left: viewport.New(), right: viewport.New(), editor: ed,
+		showSummary: strings.TrimSpace(summary) != "", // the summary is what people open a meeting for
 	}, nil
 }
 
@@ -58,6 +63,22 @@ func (v viewerModel) Update(msg tea.Msg) (viewerModel, tea.Cmd) {
 		return v, nil
 	case tea.KeyPressMsg:
 		return v.key(msg)
+	case summaryDoneMsg:
+		if msg.id != v.meta.ID {
+			return v, nil
+		}
+		v.writing = false
+		if msg.err != nil {
+			v.err = "The summary failed: " + msg.err.Error()
+			return v, nil
+		}
+		if m, err := v.st.Load(v.meta.ID); err == nil {
+			v.m, v.meta = m, m.Meta
+		}
+		v.summary, _ = v.m.Summary()
+		v.showSummary, v.note = true, "Summary saved."
+		v.layout()
+		return v, nil
 	}
 	if v.editing {
 		var cmd tea.Cmd
@@ -101,6 +122,23 @@ func (v viewerModel) key(k tea.KeyPressMsg) (viewerModel, tea.Cmd) {
 			v.layout()
 		}
 		return v, nil
+	case "r":
+		if v.summarize == nil || v.writing {
+			return v, nil
+		}
+		v.writing, v.err, v.note = true, "", ""
+		return v, summarizeCmd(v.summarize, v.meta.ID)
+	case "y":
+		text := v.notesText
+		what := "notes"
+		if v.showSummary {
+			text, what = v.summary, "summary"
+		}
+		if strings.TrimSpace(text) == "" {
+			return v, nil
+		}
+		v.note = "Copied the " + what + "."
+		return v, tea.SetClipboard(text)
 	}
 	var cmd tea.Cmd
 	if v.focusRight {
@@ -163,10 +201,18 @@ func (v viewerModel) View() string {
 	sep := t.style(t.Border).Render(strings.TrimSuffix(strings.Repeat("│\n", v.left.Height()+1), "\n"))
 	body := lipgloss.JoinHorizontal(lipgloss.Top, Indent(left, 2), " ", sep, " ", right)
 	status := ""
-	if v.err != "" {
+	switch {
+	case v.err != "":
 		status = t.style(t.Err).Render("! " + v.err)
+	case v.writing:
+		status = dim.Render("Writing the summary with Claude…")
+	case v.note != "":
+		status = accent.Render("✓ " + v.note)
 	}
-	keys := "tab focus · e edit notes · s summary · esc back"
+	keys := "esc back · s summary/notes · y copy · r rewrite · e edit · tab"
+	if v.summarize == nil {
+		keys = "esc back · s summary/notes · y copy · e edit · tab"
+	}
 	divider := t.style(t.Border).Render(strings.Repeat("─", v.width))
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "  "+status, divider, "  "+dim.Render(keys))
+	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "  "+ansiTrunc(status, v.width-2), divider, "  "+ansiTrunc(dim.Render(keys), v.width-2))
 }

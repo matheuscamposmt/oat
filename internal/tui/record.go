@@ -14,6 +14,7 @@ import (
 	"github.com/matheuscamposmt/oat/internal/chunk"
 	"github.com/matheuscamposmt/oat/internal/session"
 	"github.com/matheuscamposmt/oat/internal/store"
+	"github.com/matheuscamposmt/oat/internal/summary"
 	"github.com/matheuscamposmt/oat/internal/transcribe"
 )
 
@@ -47,6 +48,9 @@ type recordModel struct {
 	title      string
 	model      string
 	segs       []store.Segment
+	live       map[int64]session.LiveEvent // the open live segments, by ID
+	liveSeen   bool
+	liveState  string // from session.LiveStateEvent
 	notes      textarea.Model
 	vp         viewport.Model
 	spin       spinner.Model
@@ -67,7 +71,19 @@ type recordModel struct {
 	now        time.Time
 	notesDirty bool
 	notesAt    time.Time
+	summarize  func(id string) error // nil turns the summary off
+	sumState   sumState
+	sumErr     string
 }
+
+type sumState int
+
+const (
+	sumNone sumState = iota
+	sumWriting
+	sumSaved
+	sumFailed
+)
 
 func newRecordModel(t Theme, rec Recorder) recordModel {
 	meta := rec.Meeting().Snapshot()
@@ -84,6 +100,7 @@ func newRecordModel(t Theme, rec Recorder) recordModel {
 		theme: t, rec: rec, title: meta.Title, model: meta.Model,
 		notes: ta, vp: viewport.New(), spin: sp,
 		focusNotes: true, follow: true, levels: map[store.Speaker][]float64{},
+		live:   map[int64]session.LiveEvent{},
 		echoOn: rec.EchoOn(), now: time.Now(),
 	}
 }
@@ -101,9 +118,24 @@ func (m recordModel) Update(msg tea.Msg) (recordModel, tea.Cmd) {
 	case recEventMsg:
 		save := m.handleEvent(msg.ev)
 		if m.stopped {
+			if m.stopErr == nil && m.summarize != nil && m.hasContent() {
+				m.sumState = sumWriting
+				// The notes reach the disk before the summary reads them.
+				return m, tea.Batch(tea.Sequence(save, summarizeCmd(m.summarize, m.rec.Meeting().Snapshot().ID)), m.spin.Tick)
+			}
 			return m, tea.Batch(save, tea.Tick(4*time.Second, func(time.Time) tea.Msg { return backHomeMsg{from: recordScreen} }))
 		}
 		return m, tea.Batch(save, waitEvent(m.rec.Events()))
+	case summaryDoneMsg:
+		if msg.id != m.rec.Meeting().Snapshot().ID {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.sumState, m.sumErr = sumFailed, msg.err.Error()
+		} else {
+			m.sumState = sumSaved
+		}
+		return m, nil
 	case tickMsg:
 		m.now = time.Time(msg)
 		var cmd tea.Cmd
@@ -141,6 +173,16 @@ func (m *recordModel) handleEvent(ev any) tea.Cmd {
 			h = h[len(h)-historyLen:]
 		}
 		m.levels[e.Speaker] = h
+	case session.LiveStateEvent:
+		m.liveSeen, m.liveState = true, e.State
+	case session.LiveEvent:
+		m.liveSeen = true
+		if e.Done {
+			delete(m.live, e.ID)
+		} else {
+			m.live[e.ID] = e
+		}
+		m.refreshTranscript()
 	case transcribe.SegmentsEvent:
 		m.segs = append(m.segs, e.Segments...)
 		if !m.warnFatal {
@@ -174,6 +216,9 @@ func (m recordModel) handleKey(k tea.KeyPressMsg) (recordModel, tea.Cmd) {
 	key := k.String()
 	switch {
 	case m.stopped:
+		if key == "enter" && m.sumState == sumSaved {
+			return m, msgCmd(openMeetingMsg{id: m.rec.Meeting().Snapshot().ID})
+		}
 		return m, msgCmd(backHomeMsg{from: recordScreen})
 	case m.stopping:
 		if key == "q" || key == "ctrl+c" {
@@ -196,6 +241,8 @@ func (m recordModel) handleKey(k tea.KeyPressMsg) (recordModel, tea.Cmd) {
 		return m, nil
 	case "ctrl+s":
 		return m.stop()
+	case "ctrl+b":
+		return m.markMoment()
 	case "ctrl+p":
 		if m.rec.Paused() {
 			m.rec.Resume()
@@ -253,6 +300,25 @@ func (m recordModel) handleKey(k tea.KeyPressMsg) (recordModel, tea.Cmd) {
 	return m, cmd
 }
 
+// markMoment writes "⚑ HH:MM:SS " on a new line of the notes. The summary
+// turns each mark into a highlight.
+func (m recordModel) markMoment() (recordModel, tea.Cmd) {
+	mark := summary.Mark + " " + store.Clock(time.Since(m.rec.Started()).Seconds()) + " "
+	if m.notes.LineInfo().CharOffset > 0 {
+		mark = "\n" + mark
+	}
+	m.notes.InsertString(mark)
+	m.notesDirty, m.notesAt = true, time.Now()
+	m.focusNotes = true
+	m.help = false
+	return m, m.notes.Focus()
+}
+
+// hasContent reports whether the meeting has text to summarize.
+func (m recordModel) hasContent() bool {
+	return len(m.segs) > 0 || strings.TrimSpace(m.notes.Value()) != ""
+}
+
 func (m recordModel) stop() (recordModel, tea.Cmd) {
 	m.stopping = true
 	m.notes.Blur()
@@ -283,7 +349,14 @@ func (m *recordModel) layout() {
 }
 
 func (m *recordModel) refreshTranscript() {
-	m.vp.SetContent(RenderTranscript(m.theme, store.Clean(m.segs), m.vp.Width()))
+	content := RenderTranscript(m.theme, store.Clean(m.segs), m.vp.Width())
+	if live := RenderLive(m.theme, m.live, m.vp.Width()); live != "" {
+		if content != "" {
+			content += "\n"
+		}
+		content += live
+	}
+	m.vp.SetContent(content)
 	if m.follow {
 		m.vp.GotoBottom()
 	}
@@ -309,10 +382,17 @@ func (m recordModel) View() string {
 	if m.echoOn {
 		echo = "echo on"
 	}
-	info := dim.Render(fmt.Sprintf("%s · %s · %s", m.rec.Lang(), shortModel(m.model), echo))
+	model := dim.Render(shortModel(m.model))
+	switch {
+	case m.liveState == session.StateReplay || m.liveState == session.StateNoLogin:
+		model += " " + t.style(t.Warn).Render(m.liveState)
+	case m.liveSeen:
+		model += dim.Render(" live")
+	}
+	info := dim.Render(m.rec.Lang()+" · ") + model + dim.Render(" · "+echo)
 	header := Box(t, m.width, accent.Bold(true).Render("oat"), state, []string{Spread(m.title, info, m.width-4)})
 
-	meters := "  " + m.meter(store.Me) + "      " + m.meter(store.Them)
+	meters := ansiTrunc("  "+m.meter(store.Me)+"      "+m.meter(store.Them), m.width)
 
 	body := m.panes()
 	if m.help {
@@ -324,6 +404,12 @@ func (m recordModel) View() string {
 	case m.stopped && m.stopErr != nil:
 		status = t.style(t.Err).Render("! Transcription stopped: " + m.stopErr.Error() +
 			". The chunks stay on disk, and the next start of oat sends them.")
+	case m.stopped && m.sumState == sumWriting:
+		status = accent.Render("✓ Saved") + " " + m.spin.View() + dim.Render(" Writing the summary with Claude…")
+	case m.stopped && m.sumState == sumSaved:
+		status = accent.Render("✓ Saved · ✓ Summary ready")
+	case m.stopped && m.sumState == sumFailed:
+		status = accent.Render("✓ Saved") + t.style(t.Warn).Render(" · The summary failed: "+m.sumErr) + dim.Render(" · In Claude Code: /mcp__oat__enhance")
 	case m.stopped:
 		status = accent.Render("✓ Saved") + dim.Render(" · In Claude Code: /mcp__oat__enhance")
 	case m.stopping:
@@ -346,8 +432,12 @@ func (m recordModel) View() string {
 		warn = dim.Render(m.rec.Meeting().Dir)
 	}
 
-	keys := "tab focus · ctrl+p pause · ctrl+l lang · ctrl+s stop · ? help"
+	keys := "ctrl+s stop · ctrl+b mark · ctrl+p pause · ctrl+l lang · tab · ? help"
 	switch {
+	case m.stopped && m.sumState == sumSaved:
+		keys = "enter opens the summary · any other key goes back to the list"
+	case m.stopped && m.sumState == sumWriting:
+		keys = "any key goes back to the list (the summary goes on)"
 	case m.stopped:
 		keys = "any key goes back to the list"
 	case m.stopping:
@@ -359,7 +449,7 @@ func (m recordModel) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header, meters, "", body,
 		"  "+ansiTrunc(status, m.width-2), "  "+ansiTrunc(warn, m.width-2),
-		divider, "  "+dim.Render(keys))
+		divider, "  "+ansiTrunc(dim.Render(keys), m.width-2))
 }
 
 func (m recordModel) meter(sp store.Speaker) string {
@@ -388,7 +478,7 @@ func (m recordModel) panes() string {
 		return t.style(t.Dim).Render(s)
 	}
 	var trBody string
-	if len(m.segs) == 0 {
+	if len(m.segs) == 0 && len(m.live) == 0 {
 		trBody = lipgloss.NewStyle().Width(m.vp.Width()).Height(m.vp.Height()).Render(t.style(t.Dim).Render("Waiting for speech…"))
 	} else {
 		trBody = m.vp.View()
@@ -408,6 +498,7 @@ func (m recordModel) panes() string {
 func helpText(t Theme) string {
 	rows := [][2]string{
 		{"tab", "move the focus between the transcript and the notes"},
+		{"ctrl+b", "mark this moment in the notes; the summary explains it"},
 		{"ctrl+p", "pause or resume"},
 		{"ctrl+l", "change the language for the next chunks: pt, en, auto"},
 		{"ctrl+s", "stop and save"},

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -26,6 +27,7 @@ import (
 	"github.com/matheuscamposmt/oat/internal/mcpserver"
 	"github.com/matheuscamposmt/oat/internal/session"
 	"github.com/matheuscamposmt/oat/internal/store"
+	"github.com/matheuscamposmt/oat/internal/summary"
 	"github.com/matheuscamposmt/oat/internal/transcribe"
 	"github.com/matheuscamposmt/oat/internal/tui"
 )
@@ -37,6 +39,7 @@ const usage = `oat records meetings from the terminal and transcribes them.
 Usage:
   oat                  open the list of meetings
   oat new [title]      start a recording now
+  oat summary [id]     write summary.md with Claude Code (default: the latest meeting)
   oat mcp              run the MCP server (Claude Code starts it)
   oat doctor           test the environment
   oat setup            register the MCP server in Claude Code
@@ -44,6 +47,7 @@ Usage:
 
 Flags for oat and oat new:
   --transcriber S  claude (the Claude Code voice stream) or groq
+  --no-live        claude only: send each chunk after its pause, not while people speak
   --lang CODE      language of the meeting: pt, en, or auto
   --model NAME     Groq only: whisper-large-v3-turbo or whisper-large-v3
   --echo MODE      echo cancel: auto, on, or off
@@ -62,6 +66,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runHUD(cmd == "new", args, stderr)
 	case "mcp":
 		return runMCP(stderr)
+	case "summary":
+		return runSummary(args, stdout, stderr)
 	case "doctor":
 		return runDoctor(stdout, stderr)
 	case "setup":
@@ -88,6 +94,7 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	var o config.Overrides
 	fs.StringVar(&o.Transcriber, "transcriber", "", "")
+	fs.BoolVar(&o.NoLive, "no-live", false, "")
 	fs.StringVar(&o.Lang, "lang", "", "")
 	fs.StringVar(&o.Model, "model", "", "")
 	fs.StringVar(&o.Echo, "echo", "", "")
@@ -108,9 +115,19 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	if err := cfg.Validate(); err != nil {
 		return fail(stderr, err)
 	}
-	client, err := newClient(cfg, paths)
+	client, claude, err := newClient(cfg, paths)
 	if err != nil {
 		return fail(stderr, err)
+	}
+	var live session.LiveFunc
+	if claude != nil && cfg.Live {
+		live = func(ctx context.Context, lang string, onText func(string)) (session.LiveStream, error) {
+			st, err := claude.Open(ctx, lang, onText)
+			if err != nil {
+				return nil, err // not a typed nil in the interface
+			}
+			return st, nil
+		}
 	}
 
 	ctx := context.Background()
@@ -142,7 +159,7 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 			if err := liveErr(); err != nil {
 				return nil, err
 			}
-			s, err := session.Start(ctx, session.Options{Title: title, Config: cfg, Store: st, Client: client, Pactl: pactl, Echo: echo})
+			s, err := session.Start(ctx, session.Options{Title: title, Config: cfg, Store: st, Client: client, Live: live, Pactl: pactl, Echo: echo})
 			if err != nil {
 				return nil, err
 			}
@@ -151,6 +168,7 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 		Drain: func(ctx context.Context, emit func(any)) {
 			session.Drain(ctx, st, client, cfg, emit)
 		},
+		Summarize: summarizer(cfg),
 		AutoStart: isNew,
 		NewTitle:  title,
 	}
@@ -160,26 +178,107 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	return 0
 }
 
+// summarizer returns the function that writes the summary after a meeting,
+// or nil when auto_summary is off or Claude Code is not installed. It runs
+// "oat summary" in its own session, so the summary ends even when you quit
+// oat, or press ctrl+c, while it runs.
+func summarizer(cfg config.Config) func(id string) error {
+	if !cfg.AutoSummary {
+		return nil
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		return nil
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	return func(id string) error {
+		cmd := exec.Command(self, "summary", "--notify", id)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		var errOut bytes.Buffer
+		cmd.Stderr = &errOut
+		if err := cmd.Run(); err != nil {
+			if msg := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(errOut.String()), "oat:")); msg != "" {
+				return errors.New(msg)
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+func runSummary(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("summary", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	notify := fs.Bool("notify", false, "")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	st := store.New(paths.Meetings())
+	var m *store.Meeting
+	if id := fs.Arg(0); id == "" || id == "latest" {
+		m, err = st.Latest()
+	} else {
+		m, err = st.Load(id)
+	}
+	if err != nil {
+		return fail(stderr, err)
+	}
+	bin, err := exec.LookPath("claude")
+	if err != nil {
+		return fail(stderr, errors.New("claude is not installed. Install Claude Code to write summaries"))
+	}
+	title, err := summary.Write(context.Background(), m, summary.Claude(bin))
+	if *notify {
+		sendNotification(title, err)
+	}
+	if err != nil {
+		return fail(stderr, err)
+	}
+	fmt.Fprintln(stdout, m.SummaryPath())
+	return 0
+}
+
+// sendNotification shows a desktop notification when notify-send exists.
+func sendNotification(title string, err error) {
+	bin, lerr := exec.LookPath("notify-send")
+	if lerr != nil {
+		return
+	}
+	body := "Summary ready: " + title
+	if err != nil {
+		body = "The summary failed: " + err.Error()
+	}
+	_ = exec.Command(bin, "--app-name=oat", "oat", body).Run()
+}
+
 // newClient returns the client of the configured backend. It never reads the
 // Groq key when the backend is claude, and it never falls back to Groq.
-func newClient(cfg config.Config, paths config.Paths) (transcribe.Client, error) {
+// The second result is the Claude client, or nil for Groq.
+func newClient(cfg config.Config, paths config.Paths) (transcribe.Client, *claudestt.Client, error) {
 	if cfg.Transcriber == "groq" {
 		key, _, err := config.GroqKey(cfg, paths.Config)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return groq.New(key), nil
+		return groq.New(key), nil, nil
 	}
 	creds, err := claudestt.CredentialsPath()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Only a missing login stops oat here. An expired token is renewed by
 	// Claude Code, and the pipeline waits for it.
 	if _, err := claudestt.ReadToken(creds); errors.Is(err, claudestt.ErrNoLogin) {
-		return nil, err
+		return nil, nil, err
 	}
-	return claudestt.New(creds, "oat/"+version), nil
+	c := claudestt.New(creds, "oat/"+version)
+	return c, c, nil
 }
 
 // parseInterspersed parses flags before and after the title words. The flag
@@ -227,6 +326,7 @@ func runDoctor(stdout, stderr io.Writer) int {
 		ConfigPath:   paths.Config,
 		ConfigErr:    cfgErr,
 		ExpiryMargin: claudestt.ExpiryMargin,
+		AutoSummary:  cfg.AutoSummary,
 		LookPath:     exec.LookPath,
 		Pactl:        pactl,
 		Transcriber:  cfg.Transcriber,

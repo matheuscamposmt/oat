@@ -252,6 +252,13 @@ func (p *Pipeline) process(ctx context.Context, path string) error {
 	}
 }
 
+// Save writes the segments of a result that another path transcribed, for
+// example the live transcript. Then it deletes or keeps the WAV file at path.
+// An empty path has no file. Save does not change the queue count.
+func (p *Pipeline) Save(path string, speaker store.Speaker, start, dur float64, res stt.Result) {
+	_ = p.save(path, speaker, start, dur, res)
+}
+
 // save writes the segments of a chunk, then deletes or keeps the WAV file.
 func (p *Pipeline) save(path string, speaker store.Speaker, start, dur float64, res stt.Result) error {
 	segs := Segments(res, speaker, start, dur)
@@ -266,6 +273,9 @@ func (p *Pipeline) save(path string, speaker store.Speaker, start, dur float64, 
 		}
 		p.mu.Unlock()
 		p.emit(SegmentsEvent{Segments: segs})
+	}
+	if path == "" {
+		return nil
 	}
 	if p.cfg.KeepAudio {
 		if err := os.MkdirAll(p.m.AudioDir(), 0o755); err == nil {

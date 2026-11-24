@@ -228,3 +228,20 @@ func TestClaudeTokenInsideTheMargin(t *testing.T) {
 		t.Fatalf("Claude login %+v", r)
 	}
 }
+
+func TestSummaryNeedsClaude(t *testing.T) {
+	d := claudeDeps(t)
+	d.AutoSummary = true
+	if r := byName(Run(context.Background(), d))["Summary"]; !r.OK || !strings.Contains(r.Detail, "/usr/bin/claude -p") {
+		t.Fatalf("Summary %+v", r)
+	}
+	d.LookPath = func(s string) (string, error) {
+		if s == "claude" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + s, nil
+	}
+	if r := byName(Run(context.Background(), d))["Summary"]; r.OK || !strings.Contains(r.Fix, "auto_summary = false") {
+		t.Fatalf("Summary %+v", r)
+	}
+}

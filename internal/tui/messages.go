@@ -13,7 +13,17 @@ type (
 	backHomeMsg       struct{ from screen }
 	quitDuringDrain   struct{}
 	quitRequestMsg    struct{}
+	// summaryDoneMsg comes when a summary that the user or the stop started ends.
+	summaryDoneMsg struct {
+		id  string
+		err error
+	}
 )
+
+// summarizeCmd runs fn for the meeting in the background.
+func summarizeCmd(fn func(string) error, id string) tea.Cmd {
+	return func() tea.Msg { return summaryDoneMsg{id: id, err: fn(id)} }
+}
 
 // Messages of the recording screen.
 type (

@@ -12,7 +12,9 @@ import (
 
 // Config holds the values that change how oat records and transcribes.
 type Config struct {
-	Transcriber string `toml:"transcriber"` // claude or groq
+	Transcriber string `toml:"transcriber"`  // claude or groq
+	Live        bool   `toml:"live"`         // claude only: show the text while people speak
+	AutoSummary bool   `toml:"auto_summary"` // write summary.md with Claude Code after each meeting
 	Lang        string `toml:"lang"`
 	Model       string `toml:"model"`
 	Echo        string `toml:"echo"`
@@ -23,6 +25,7 @@ type Config struct {
 // Overrides holds the command flags. An empty string or false keeps the file value.
 type Overrides struct {
 	Transcriber string
+	NoLive      bool
 	Lang        string
 	Model       string
 	Echo        string
@@ -31,7 +34,7 @@ type Overrides struct {
 
 // Default returns the configuration that oat uses without a file.
 func Default() Config {
-	return Config{Transcriber: "claude", Lang: "pt", Model: "whisper-large-v3-turbo", Echo: "auto"}
+	return Config{Transcriber: "claude", Live: true, AutoSummary: true, Lang: "pt", Model: "whisper-large-v3-turbo", Echo: "auto"}
 }
 
 // ClaudeModel is the model name that oat saves in meta.json for the Claude backend.
@@ -71,6 +74,9 @@ func Load(path string) (Config, error) {
 func (c Config) Apply(o Overrides) Config {
 	if o.Transcriber != "" {
 		c.Transcriber = o.Transcriber
+	}
+	if o.NoLive {
+		c.Live = false
 	}
 	if o.Lang != "" {
 		c.Lang = o.Lang

@@ -37,9 +37,11 @@ type Deps struct {
 	Now         func() time.Time
 	// ExpiryMargin is how long before its expiry the client stops using a token.
 	ExpiryMargin time.Duration
-	MCPStatus    func(ctx context.Context) error // nil when Claude Code knows the oat server
-	DataDir      string
-	Echo         *audio.Echo
+	// AutoSummary is on when oat writes a summary after each meeting with claude -p.
+	AutoSummary bool
+	MCPStatus   func(ctx context.Context) error // nil when Claude Code knows the oat server
+	DataDir     string
+	Echo        *audio.Echo
 }
 
 // Run runs all tests in order.
@@ -80,6 +82,14 @@ func Run(ctx context.Context, d Deps) []Result {
 	} else {
 		for _, r := range groqChecks(ctx, d) {
 			add(r)
+		}
+	}
+
+	if d.AutoSummary {
+		if p, err := d.LookPath("claude"); err != nil {
+			add(Result{Name: "Summary", Detail: "claude is not in the PATH", Fix: "Install Claude Code, or set auto_summary = false in ~/.config/oat/config.toml."})
+		} else {
+			add(Result{Name: "Summary", OK: true, Detail: "written after each meeting by " + p + " -p"})
 		}
 	}
 
