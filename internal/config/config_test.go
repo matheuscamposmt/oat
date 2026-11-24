@@ -26,7 +26,7 @@ func TestLoadFileOverridesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{Transcriber: "claude", Lang: "en", Model: "whisper-large-v3-turbo", Echo: "auto", KeepAudio: true}
+	want := Config{Transcriber: "claude", Live: true, Lang: "en", Model: "whisper-large-v3-turbo", Echo: "auto", KeepAudio: true}
 	if cfg != want {
 		t.Fatalf("got %+v, want %+v", cfg, want)
 	}
@@ -44,7 +44,7 @@ func TestLoadBadFile(t *testing.T) {
 
 func TestApplyFlags(t *testing.T) {
 	got := Default().Apply(Overrides{Lang: "en", Echo: "off"})
-	want := Config{Transcriber: "claude", Lang: "en", Model: "whisper-large-v3-turbo", Echo: "off"}
+	want := Config{Transcriber: "claude", Live: true, Lang: "en", Model: "whisper-large-v3-turbo", Echo: "off"}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
@@ -155,5 +155,21 @@ func TestMaskKey(t *testing.T) {
 	}
 	if got := MaskKey("short"); got != "*****" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestLiveDefaultAndFlag(t *testing.T) {
+	if !Default().Live {
+		t.Fatal("live must be on by default")
+	}
+	if Default().Apply(Overrides{NoLive: true}).Live {
+		t.Fatal("--no-live did not turn live off")
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("live = false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := Load(path); err != nil || cfg.Live {
+		t.Fatalf("got %+v %v", cfg, err)
 	}
 }

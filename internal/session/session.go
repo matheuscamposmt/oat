@@ -32,6 +32,7 @@ type Options struct {
 	Pactl       audio.Pactl
 	Echo        *audio.Echo // nil turns echo cancel off
 	Open        func(ctx context.Context, device string) (Source, error)
+	Live        LiveFunc // nil turns the live transcript off
 	Now         func() time.Time
 	PollEvery   time.Duration // 2 s
 	RenderEvery time.Duration // 10 s
@@ -75,6 +76,8 @@ type Session struct {
 	captureOnce sync.Once
 	capWG       sync.WaitGroup
 	bgWG        sync.WaitGroup
+
+	liveState
 
 	paused atomic.Bool
 	lang   atomic.Value // string
@@ -124,6 +127,10 @@ func Start(ctx context.Context, o Options) (*Session, error) {
 		},
 	}
 	s.lang.Store(o.Config.Lang)
+	s.liveCtx, s.liveCancel = context.WithCancel(ctx)
+	if o.Live != nil {
+		s.lanes = map[store.Speaker]*lane{store.Me: newLane(s, store.Me), store.Them: newLane(s, store.Them)}
+	}
 
 	s.mu.Lock()
 	s.applyEcho(ctx)
@@ -194,6 +201,7 @@ func (s *Session) StopCapture() {
 		close(s.stopCh)
 		s.capWG.Wait()
 		s.bgWG.Wait()
+		s.liveWG.Wait() // a failed live segment queues its chunk, so wait before Close
 		if s.opts.Echo != nil {
 			ctx, cancel := cleanupContext()
 			if err := s.opts.Echo.Disable(ctx, true); err != nil {
@@ -213,6 +221,7 @@ func (s *Session) StopCapture() {
 // Abandon stops the capture and the drain now. The chunks that wait stay on
 // disk, and the next start sends them.
 func (s *Session) Abandon() {
+	s.liveCancel() // the open live segments end now, and their chunk files stay
 	s.StopCapture()
 	s.cancel()
 	s.pipe.Abort()
@@ -312,8 +321,12 @@ const (
 func (s *Session) capture(sp store.Speaker) {
 	defer s.capWG.Done()
 	ch := chunk.New()
+	ln := s.lanes[sp] // nil without the live transcript
+	if ln != nil {
+		ch.Obs = ln
+	}
 	// Flush on every exit. The closure makes Flush run at exit, not now.
-	defer func() { s.saveChunk(sp, ch.Flush()) }()
+	defer func() { s.saveChunk(sp, ln, ch.Flush()) }()
 	var failures []time.Time
 	for {
 		src, err := s.opts.Open(s.ctx, s.device(sp))
@@ -323,7 +336,7 @@ func (s *Session) capture(sp store.Speaker) {
 			}
 			continue
 		}
-		reason := s.pump(sp, src, ch)
+		reason := s.pump(sp, src, ch, ln)
 		src.Close()
 		switch reason {
 		case stopped:
@@ -337,7 +350,7 @@ func (s *Session) capture(sp store.Speaker) {
 }
 
 // pump reads frames until the stream ends, a restart comes, or the session stops.
-func (s *Session) pump(sp store.Speaker, src Source, ch *chunk.Chunker) endReason {
+func (s *Session) pump(sp store.Speaker, src Source, ch *chunk.Chunker, ln *lane) endReason {
 	idx := s.frameIndex()
 	wasPaused := false
 	n := 0
@@ -358,7 +371,7 @@ func (s *Session) pump(sp store.Speaker, src Source, ch *chunk.Chunker) endReaso
 			}
 			if s.paused.Load() {
 				if !wasPaused {
-					s.saveChunk(sp, ch.Flush())
+					s.saveChunk(sp, ln, ch.Flush())
 				}
 				wasPaused = true
 				idx++
@@ -369,7 +382,7 @@ func (s *Session) pump(sp store.Speaker, src Source, ch *chunk.Chunker) endReaso
 				s.emit(LevelEvent{Speaker: sp, DB: chunk.LevelDB(frame)})
 			}
 			n++
-			s.saveChunk(sp, ch.Push(idx, frame))
+			s.saveChunk(sp, ln, ch.Push(idx, frame))
 			idx++
 		}
 	}
@@ -409,18 +422,27 @@ func (s *Session) retryCapture(sp store.Speaker, failures *[]time.Time, err erro
 	}
 }
 
-// saveChunk writes a chunk to disk and queues it. A write error stops the recording.
-func (s *Session) saveChunk(sp store.Speaker, c *chunk.Chunk) {
-	if c == nil {
+// saveChunk writes a chunk to disk. Without a live lane, it queues the file.
+// With one, the lane decides: the live text replaces the file, or the file
+// goes to the queue. A write error stops the recording. The file is written
+// before any live text, so a crash leaves it for the next start.
+func (s *Session) saveChunk(sp store.Speaker, ln *lane, c *chunk.Chunk) {
+	path := ""
+	if c != nil {
+		path = filepath.Join(s.m.ChunksDir(), store.ChunkName(sp, c.Start))
+		if err := store.WriteFileAtomic(path, chunk.EncodeWAV(c.Samples)); err != nil {
+			s.emit(transcribe.Warning{Fatal: true, Msg: "Disk write failed: " + err.Error() + ". oat stopped the recording."})
+			go s.Stop()
+			path = ""
+		}
+	}
+	if ln != nil {
+		ln.settle(path)
 		return
 	}
-	path := filepath.Join(s.m.ChunksDir(), store.ChunkName(sp, c.Start))
-	if err := store.WriteFileAtomic(path, chunk.EncodeWAV(c.Samples)); err != nil {
-		s.emit(transcribe.Warning{Fatal: true, Msg: "Disk write failed: " + err.Error() + ". oat stopped the recording."})
-		go s.Stop()
-		return
+	if path != "" {
+		s.pipe.Enqueue(path)
 	}
-	s.pipe.Enqueue(path)
 }
 
 func (s *Session) pollDevices() {
