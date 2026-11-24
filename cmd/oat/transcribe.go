@@ -17,6 +17,7 @@ import (
 	"github.com/matheuscamposmt/oat/internal/claudestt"
 	"github.com/matheuscamposmt/oat/internal/config"
 	"github.com/matheuscamposmt/oat/internal/filetx"
+	"github.com/matheuscamposmt/oat/internal/keyterms"
 	"github.com/matheuscamposmt/oat/internal/stt"
 )
 
@@ -34,7 +35,8 @@ func runTranscribe(args []string, stdout, stderr io.Writer) int {
 	fset.StringVar(&o.Transcriber, "transcriber", "", "")
 	fset.StringVar(&o.Lang, "lang", "", "")
 	fset.StringVar(&o.Model, "model", "", "")
-	keyterms := fset.String("keyterms", "", "")
+	terms := fset.String("keyterms", "", "")
+	set := fset.String("keyterms-set", "", "")
 	files, err := parseInterspersed(fset, args)
 	if err != nil {
 		return 2
@@ -59,22 +61,25 @@ func runTranscribe(args []string, stdout, stderr io.Writer) int {
 	if err := cfg.Validate(); err != nil {
 		return fail(stderr, err)
 	}
+	lists, err := keyterms.Load(paths.Config)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	kt, err := keytermsFor(lists, *terms, *set, "")
+	if err != nil {
+		return fail(stderr, err)
+	}
 	client, _, err := newTranscribeClient(cfg, paths)
 	if err != nil {
 		return fail(stderr, err)
 	}
 	opts := filetx.Options{
-		STT:     stt.Options{Model: cfg.Model, Language: cfg.Lang},
+		STT:     stt.Options{Model: cfg.Model, Language: cfg.Lang, Keyterms: kt},
 		Workers: 2,
 		Log:     func(format string, args ...any) { fmt.Fprintf(stderr, "oat: "+format+"\n", args...) },
 	}
 	if cfg.Transcriber == "claude" {
 		opts.Workers = claudestt.MaxStreams
-	}
-	for _, t := range strings.Split(*keyterms, ",") {
-		if t = strings.TrimSpace(t); t != "" {
-			opts.STT.Keyterms = append(opts.STT.Keyterms, t)
-		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

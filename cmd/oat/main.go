@@ -24,6 +24,7 @@ import (
 	"github.com/matheuscamposmt/oat/internal/config"
 	"github.com/matheuscamposmt/oat/internal/doctor"
 	"github.com/matheuscamposmt/oat/internal/groq"
+	"github.com/matheuscamposmt/oat/internal/keyterms"
 	"github.com/matheuscamposmt/oat/internal/mcpserver"
 	"github.com/matheuscamposmt/oat/internal/session"
 	"github.com/matheuscamposmt/oat/internal/store"
@@ -108,6 +109,8 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	fs.StringVar(&o.Model, "model", "", "")
 	fs.StringVar(&o.Echo, "echo", "", "")
 	fs.BoolVar(&o.KeepAudio, "keep-audio", false, "")
+	flagTerms := fs.String("keyterms", "", "")
+	set := fs.String("keyterms-set", "", "")
 	words, err := parseInterspersed(fs, args)
 	if err != nil {
 		return 2
@@ -122,6 +125,13 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	}
 	cfg = cfg.Apply(o)
 	if err := cfg.Validate(); err != nil {
+		return fail(stderr, err)
+	}
+	lists, err := keyterms.Load(paths.Config)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	if _, err := keyterms.Pick(lists, *set, ""); err != nil {
 		return fail(stderr, err)
 	}
 	client, claude, err := newClient(cfg, paths)
@@ -168,7 +178,11 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 			if err := liveErr(); err != nil {
 				return nil, err
 			}
-			s, err := session.Start(ctx, session.Options{Title: title, Config: cfg, Store: st, Client: client, Live: live, Pactl: pactl, Echo: echo})
+			terms, err := keytermsFor(lists, *flagTerms, *set, title)
+			if err != nil {
+				return nil, err
+			}
+			s, err := session.Start(ctx, session.Options{Title: title, Config: cfg, Store: st, Client: client, Live: live, Pactl: pactl, Echo: echo, Keyterms: terms})
 			if err != nil {
 				return nil, err
 			}
@@ -288,6 +302,17 @@ func newClient(cfg config.Config, paths config.Paths) (transcribe.Client, *claud
 	}
 	c := claudestt.New(creds, "oat/"+version)
 	return c, c, nil
+}
+
+// keytermsFor returns the key terms of a recording. set names the list; without
+// it, the title picks one.
+func keytermsFor(lists []keyterms.List, flag, set, title string) ([]string, error) {
+	list, err := keyterms.Pick(lists, set, title)
+	if err != nil {
+		return nil, err
+	}
+	kept, _ := keyterms.Merge(strings.Split(flag, ","), list, title)
+	return keyterms.Texts(kept), nil
 }
 
 // parseInterspersed parses flags before and after the title words. The flag
