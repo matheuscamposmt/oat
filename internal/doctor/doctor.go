@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/matheuscamposmt/oat/internal/audio"
 	"github.com/matheuscamposmt/oat/internal/config"
@@ -23,19 +24,32 @@ type Result struct {
 
 // Deps holds the functions that the tests call. Tests replace them.
 type Deps struct {
-	LookPath  func(string) (string, error)
-	Pactl     audio.Pactl
-	GroqKey   func() (key, source string, err error)
-	Ping      func(ctx context.Context, key string) error
-	MCPStatus func(ctx context.Context) error // nil when Claude Code knows the oat server
-	DataDir   string
-	Echo      *audio.Echo
+	ConfigPath  string
+	ConfigErr   error // from loading or validating the configuration file
+	LookPath    func(string) (string, error)
+	Pactl       audio.Pactl
+	Transcriber string // claude or groq
+	GroqKey     func() (key, source string, err error)
+	Ping        func(ctx context.Context, key string) error
+	// ClaudeLogin returns the expiry of the claude.ai token and the file that holds it.
+	ClaudeLogin func() (expires time.Time, source string, err error)
+	ClaudePing  func(ctx context.Context) error
+	Now         func() time.Time
+	// ExpiryMargin is how long before its expiry the client stops using a token.
+	ExpiryMargin time.Duration
+	MCPStatus    func(ctx context.Context) error // nil when Claude Code knows the oat server
+	DataDir      string
+	Echo         *audio.Echo
 }
 
 // Run runs all tests in order.
 func Run(ctx context.Context, d Deps) []Result {
 	var rs []Result
 	add := func(r Result) { rs = append(rs, r) }
+
+	if d.ConfigErr != nil {
+		add(Result{Name: "Configuration", Detail: d.ConfigErr.Error(), Fix: "Fix " + d.ConfigPath + ". The README lists the keys."})
+	}
 
 	for _, bin := range []string{"parec", "pactl"} {
 		if p, err := d.LookPath(bin); err != nil {
@@ -59,15 +73,13 @@ func Run(ctx context.Context, d Deps) []Result {
 		add(Result{Name: "Default devices", OK: true, Detail: "mic " + src + ", output " + sink})
 	}
 
-	key, source, err := d.GroqKey()
-	if err != nil {
-		add(Result{Name: "Groq key", Detail: err.Error(), Fix: "Set GROQ_API_KEY, or add groq_api_key to ~/.config/oat/config.toml and chmod 600 the file."})
+	if d.Transcriber == "claude" {
+		for _, r := range claudeChecks(ctx, d) {
+			add(r)
+		}
 	} else {
-		add(Result{Name: "Groq key", OK: true, Detail: config.MaskKey(key) + " from " + source})
-		if err := d.Ping(ctx, key); err != nil {
-			add(Result{Name: "Groq API", Detail: err.Error(), Fix: "Make sure that the key is valid at console.groq.com and that the network works."})
-		} else {
-			add(Result{Name: "Groq API", OK: true, Detail: "the key works"})
+		for _, r := range groqChecks(ctx, d) {
+			add(r)
 		}
 	}
 
@@ -92,6 +104,41 @@ func Run(ctx context.Context, d Deps) []Result {
 		add(Result{Name: "Echo cancel", OK: true, Detail: "no module left behind"})
 	}
 	return rs
+}
+
+func groqChecks(ctx context.Context, d Deps) []Result {
+	key, source, err := d.GroqKey()
+	if err != nil {
+		return []Result{{Name: "Groq key", Detail: err.Error(), Fix: "Set GROQ_API_KEY, or add groq_api_key to ~/.config/oat/config.toml and chmod 600 the file."}}
+	}
+	rs := []Result{{Name: "Groq key", OK: true, Detail: config.MaskKey(key) + " from " + source}}
+	if err := d.Ping(ctx, key); err != nil {
+		return append(rs, Result{Name: "Groq API", Detail: err.Error(), Fix: "Make sure that the key is valid at console.groq.com and that the network works."})
+	}
+	return append(rs, Result{Name: "Groq API", OK: true, Detail: "the key works"})
+}
+
+func claudeChecks(ctx context.Context, d Deps) []Result {
+	now := time.Now
+	if d.Now != nil {
+		now = d.Now
+	}
+	expires, source, err := d.ClaudeLogin()
+	if err != nil {
+		return []Result{{Name: "Claude login", Detail: err.Error(), Fix: "Run claude and log in with your claude.ai account."}}
+	}
+	if !expires.IsZero() && !now().Add(d.ExpiryMargin).Before(expires) {
+		return []Result{{Name: "Claude login", Detail: "the token expired at " + expires.Format("2006-01-02 15:04"), Fix: "Open Claude Code. It renews the token when it starts."}}
+	}
+	detail := "token from " + source
+	if !expires.IsZero() {
+		detail = fmt.Sprintf("token valid for %s, from %s", expires.Sub(now()).Round(time.Minute), source)
+	}
+	rs := []Result{{Name: "Claude login", OK: true, Detail: detail}}
+	if err := d.ClaudePing(ctx); err != nil {
+		return append(rs, Result{Name: "Claude voice", Detail: err.Error(), Fix: `The voice stream is private and can change in a Claude Code release. To use Groq, set transcriber = "groq" in ~/.config/oat/config.toml.`})
+	}
+	return append(rs, Result{Name: "Claude voice", OK: true, Detail: "the voice stream accepts the token"})
 }
 
 // Print writes the results and returns true when all tests passed.

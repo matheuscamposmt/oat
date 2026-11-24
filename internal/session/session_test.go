@@ -627,8 +627,8 @@ func TestDrainForwardsFatalWarning(t *testing.T) {
 			mu.Unlock()
 		}
 	})
-	if len(warnings) != 1 || !warnings[0].Fatal || !strings.Contains(warnings[0].Msg, "Groq rejected the API key") {
-		t.Fatalf("warnings %+v, want one fatal auth warning", warnings)
+	if len(warnings) != 1 || !warnings[0].Fatal || !strings.Contains(warnings[0].Msg, "Claude rejected the login") {
+		t.Fatalf("warnings %+v, want one fatal auth warning for the default backend", warnings)
 	}
 }
 

@@ -249,10 +249,10 @@ func (s *Store) Delete(id string) error {
 
 func (m *Meeting) path(name string) string { return filepath.Join(m.Dir, name) }
 
-// ChunksDir holds the WAV files that wait for Groq.
+// ChunksDir holds the WAV files that wait for the transcription backend.
 func (m *Meeting) ChunksDir() string { return m.path(chunksDir) }
 
-// FailedDir holds the WAV files that Groq refused.
+// FailedDir holds the WAV files that the backend refused.
 func (m *Meeting) FailedDir() string { return m.path(failedDir) }
 
 // AudioDir holds the WAV files that keep_audio keeps after transcription.
@@ -429,7 +429,7 @@ func ParseChunkName(name string) (Speaker, float64, bool) {
 	return Speaker(sp), float64(ms) / 1000, true
 }
 
-// PendingChunks lists the chunk files that wait for Groq, oldest first.
+// PendingChunks lists the chunk files that wait for the transcription backend, oldest first.
 func (m *Meeting) PendingChunks() ([]string, error) {
 	entries, err := os.ReadDir(m.ChunksDir())
 	if errors.Is(err, os.ErrNotExist) {

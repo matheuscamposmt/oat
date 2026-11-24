@@ -1,10 +1,32 @@
 # oat
 
+<p align="center"><b>Meeting notes in your terminal, transcribed and summarized with the Claude Code you already use.</b></p>
+
 <p align="center">
   <img src="docs/hud.png" alt="The oat recording screen: a live transcript on the left and your notes on the right" width="920">
 </p>
 
-oat records meetings on Linux from the terminal. It captures your microphone and the system audio as two separate streams, sends them to the Groq Whisper API, and saves the transcript next to the notes you type during the meeting. It also runs an MCP server, so Claude Code (or any other MCP client) can read your meetings and turn your rough notes into a summary.
+oat records any meeting on Linux: Google Meet, Zoom, Teams, or a call in the browser. It captures your microphone and the system audio as two separate streams, so the transcript knows who said what. You type rough notes next to the live transcript. When the meeting ends, Claude Code merges your notes with the transcript into a clean summary.
+
+oat needs no new account and no API key. The transcription uses the speech-to-text service of the Claude Code voice mode, with the login that Claude Code already has. The summary runs in Claude Code through an MCP server. If Claude Code works on your machine, oat works too.
+
+- No keys to manage: `oat doctor` finds your Claude Code login and tests it.
+- Two audio streams that never mix, "Me" and "Them", plus echo cancel for speakers.
+- Plain files: each meeting is a folder of Markdown and JSONL on your disk.
+- Each audio chunk goes to disk before it goes to the network, so a crash loses at most 30 seconds.
+- Claude Code can answer questions about past meetings, such as "what did they decide about the budget last week?"
+
+## Quick start
+
+```sh
+git clone https://github.com/matheuscamposmt/oat
+cd oat
+make install      # builds ~/.local/bin/oat and registers the MCP server in Claude Code
+oat doctor        # tests the audio, the Claude login, and the MCP server
+oat new "Weekly sync"
+```
+
+Press `ctrl+s` to stop. Then run `/mcp__oat__enhance` in Claude Code to get the summary.
 
 This is an early version. It runs on Linux only and was tested on Pop!_OS 22.04 with PipeWire.
 
@@ -12,24 +34,28 @@ This is an early version. It runs on Linux only and was tested on Pop!_OS 22.04 
 
 `oat new "Title"` starts a recording. Two `parec` processes capture the mic ("Me") and the monitor of your default output ("Them"). The two streams never mix, so the transcript knows who said what.
 
-Each stream is cut at pauses into chunks of 10 to 30 seconds and uploaded to Groq (`whisper-large-v3-turbo`). Chunks without speech are not sent. A line shows up in the transcript about 10 to 30 seconds after it was said, because Groq offers a file API and not a streaming one.
+Each stream is cut at pauses into chunks of 10 to 30 seconds. Chunks without speech are not sent. oat sends each chunk over its own connection to the Claude Code voice stream, as fast as the connection takes it, and gets the text back in about 3 seconds. A line shows up in the transcript about 10 to 30 seconds after it was said, because oat waits for the pause that ends the chunk.
+
+The voice stream gives text without times. oat splits the text of a chunk into sentences and gives each sentence a part of the chunk in proportion to its length. The times in the transcript are therefore estimates inside each chunk.
 
 While the meeting runs you type notes in the right pane. Notes are saved 2 seconds after you stop typing, and each audio chunk is written to disk as soon as it is cut, so a crash loses the audio still in memory (under 30 seconds) and nothing else.
 
 `oat mcp` gives an MCP client access to the meetings. In Claude Code, `/mcp__oat__enhance` asks Claude to merge your notes with the transcript, in the style of Granola, and save the result as `summary.md`.
 
-Audio chunks go to Groq and are deleted once they are transcribed (set `keep_audio = true` to keep them). Transcripts, notes, and summaries stay on your disk.
+Audio chunks go to the voice endpoint at api.anthropic.com (or to Groq, with `transcriber = "groq"`) and are deleted once they are transcribed. Anthropic does not document which service transcribes the audio behind that endpoint. Set `keep_audio = true` to keep the chunks. Transcripts, notes, and summaries stay on your disk.
 
 ## Requirements
 
 - Linux with PipeWire (and its Pulse layer) or PulseAudio
 - `parec` and `pactl`, from the `pulseaudio-utils` package
 - Go 1.25 or later to build. Go 1.24 downloads 1.25 on its own.
-- A Groq API key
+- Claude Code, logged in with a claude.ai account. With `transcriber = "groq"`, a Groq API key instead.
 
 ## Install
 
-Give oat your Groq key in one of two ways. Export it in your shell:
+With the default backend, oat reads the claude.ai token from `~/.claude/.credentials.json` (or `$CLAUDE_CONFIG_DIR/.credentials.json`). Run `claude` once and log in. oat never writes that file and never renews the token. Claude Code renews it when it runs.
+
+To use Groq, set `transcriber = "groq"` and give oat your Groq key in one of two ways. Export it in your shell:
 
 ```sh
 export GROQ_API_KEY=gsk_...
@@ -54,7 +80,7 @@ make install
 oat doctor
 ```
 
-`make install` builds a static binary into `~/.local/bin/oat` and runs `oat setup`, which registers the MCP server in Claude Code at user scope. `oat doctor` checks the audio stack, the key, the MCP registration, and the data folder, and prints a fix under anything that fails.
+`make install` builds a static binary into `~/.local/bin/oat` and runs `oat setup`, which registers the MCP server in Claude Code at user scope. `oat doctor` checks the audio stack, the Claude login and the voice stream (or the Groq key), the MCP registration, and the data folder. It prints a fix under anything that fails.
 
 `go install github.com/matheuscamposmt/oat/cmd/oat@latest` also works. Run `oat setup` yourself afterwards. With that install, `oat version` prints `dev`.
 
@@ -105,14 +131,15 @@ The second is a text filter that drops a "Me" line when it repeats a "Them" line
 `~/.config/oat/config.toml` is optional. These are the keys and their defaults:
 
 ```toml
+transcriber = "claude"             # claude or groq
 lang = "pt"                        # ISO 639-1 code, or "auto"
-model = "whisper-large-v3-turbo"   # or "whisper-large-v3"
+model = "whisper-large-v3-turbo"   # Groq only: or "whisper-large-v3"
 echo = "auto"                      # auto, on, off
 keep_audio = false                 # keep the WAV chunks in audio/
-groq_api_key = ""                  # used when GROQ_API_KEY is not set
+groq_api_key = ""                  # Groq only: used when GROQ_API_KEY is not set
 ```
 
-The flags `--lang`, `--model`, `--echo`, and `--keep-audio` override the file.
+The flags `--transcriber`, `--lang`, `--model`, `--echo`, and `--keep-audio` override the file.
 
 ## Files
 
@@ -125,10 +152,19 @@ Each meeting is a folder in `~/.local/share/oat/meetings/`:
 | `transcript.md` | The readable transcript |
 | `notes.md` | Your notes |
 | `summary.md` | The notes Claude wrote |
-| `chunks/` | Audio waiting for Groq |
-| `failed/` | Audio that Groq refused |
+| `chunks/` | Audio waiting for the transcription service |
+| `failed/` | Audio that the transcription service refused |
 | `audio/` | Audio kept with `keep_audio = true` |
 | `.lock` | The PID of the process that is recording |
+
+## The Claude voice stream
+
+oat uses `wss://api.anthropic.com/api/ws/speech_to_text/voice_stream`, the endpoint of the Claude Code voice mode. Anthropic does not document it, so keep these limits in mind:
+
+- The endpoint can change or close in any Claude Code release. If `oat doctor` shows `✗ Claude voice`, set `transcriber = "groq"`.
+- oat uses the claude.ai login of Claude Code outside Claude Code. Read the terms of your plan before you use it.
+- The endpoint can drop the last words of a chunk that ends in the middle of a sentence.
+- If the token expires during a meeting, the chunks wait on disk and oat tries again. Open Claude Code to renew the token.
 
 ## Groq limits
 

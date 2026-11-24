@@ -1,8 +1,10 @@
-// Command oat records meetings from the terminal and transcribes them with Groq.
+// Command oat records meetings from the terminal and transcribes them with
+// the Claude Code voice stream or with Groq.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,18 +19,20 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/matheuscamposmt/oat/internal/audio"
+	"github.com/matheuscamposmt/oat/internal/claudestt"
 	"github.com/matheuscamposmt/oat/internal/config"
 	"github.com/matheuscamposmt/oat/internal/doctor"
 	"github.com/matheuscamposmt/oat/internal/groq"
 	"github.com/matheuscamposmt/oat/internal/mcpserver"
 	"github.com/matheuscamposmt/oat/internal/session"
 	"github.com/matheuscamposmt/oat/internal/store"
+	"github.com/matheuscamposmt/oat/internal/transcribe"
 	"github.com/matheuscamposmt/oat/internal/tui"
 )
 
 var version = "dev"
 
-const usage = `oat records meetings from the terminal and transcribes them with Groq.
+const usage = `oat records meetings from the terminal and transcribes them.
 
 Usage:
   oat                  open the list of meetings
@@ -39,8 +43,9 @@ Usage:
   oat version          print the version
 
 Flags for oat and oat new:
+  --transcriber S  claude (the Claude Code voice stream) or groq
   --lang CODE      language of the meeting: pt, en, or auto
-  --model NAME     whisper-large-v3-turbo or whisper-large-v3
+  --model NAME     Groq only: whisper-large-v3-turbo or whisper-large-v3
   --echo MODE      echo cancel: auto, on, or off
   --keep-audio     keep the WAV chunks in the meeting folder
 `
@@ -82,6 +87,7 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	var o config.Overrides
+	fs.StringVar(&o.Transcriber, "transcriber", "", "")
 	fs.StringVar(&o.Lang, "lang", "", "")
 	fs.StringVar(&o.Model, "model", "", "")
 	fs.StringVar(&o.Echo, "echo", "", "")
@@ -102,7 +108,7 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	if err := cfg.Validate(); err != nil {
 		return fail(stderr, err)
 	}
-	key, _, err := config.GroqKey(cfg, paths.Config)
+	client, err := newClient(cfg, paths)
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -114,8 +120,6 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	if _, err := echo.CleanupStale(ctx); err != nil {
 		fmt.Fprintln(stderr, "oat: remove the old echo-cancel module:", err)
 	}
-	client := groq.New(key)
-
 	liveErr := func() error {
 		if live, err := st.Live(); err == nil {
 			return fmt.Errorf("a recording is in progress in another terminal (%s)", live.Meta.ID)
@@ -156,6 +160,28 @@ func runHUD(isNew bool, args []string, stderr io.Writer) int {
 	return 0
 }
 
+// newClient returns the client of the configured backend. It never reads the
+// Groq key when the backend is claude, and it never falls back to Groq.
+func newClient(cfg config.Config, paths config.Paths) (transcribe.Client, error) {
+	if cfg.Transcriber == "groq" {
+		key, _, err := config.GroqKey(cfg, paths.Config)
+		if err != nil {
+			return nil, err
+		}
+		return groq.New(key), nil
+	}
+	creds, err := claudestt.CredentialsPath()
+	if err != nil {
+		return nil, err
+	}
+	// Only a missing login stops oat here. An expired token is renewed by
+	// Claude Code, and the pipeline waits for it.
+	if _, err := claudestt.ReadToken(creds); errors.Is(err, claudestt.ErrNoLogin) {
+		return nil, err
+	}
+	return claudestt.New(creds, "oat/"+version), nil
+}
+
 // parseInterspersed parses flags before and after the title words. The flag
 // package alone stops at the first word that is not a flag.
 func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -194,9 +220,16 @@ func runDoctor(stdout, stderr io.Writer) int {
 	defer cancel()
 	pactl := audio.NewPactl()
 	cfg, cfgErr := config.Load(paths.Config)
+	if cfgErr == nil {
+		cfgErr = cfg.Validate()
+	}
 	rs := doctor.Run(ctx, doctor.Deps{
-		LookPath: exec.LookPath,
-		Pactl:    pactl,
+		ConfigPath:   paths.Config,
+		ConfigErr:    cfgErr,
+		ExpiryMargin: claudestt.ExpiryMargin,
+		LookPath:     exec.LookPath,
+		Pactl:        pactl,
+		Transcriber:  cfg.Transcriber,
 		GroqKey: func() (string, string, error) {
 			if cfgErr != nil {
 				return "", "", cfgErr
@@ -205,6 +238,21 @@ func runDoctor(stdout, stderr io.Writer) int {
 		},
 		Ping: func(ctx context.Context, key string) error {
 			return groq.New(key).Ping(ctx)
+		},
+		ClaudeLogin: func() (time.Time, string, error) {
+			path, err := claudestt.CredentialsPath()
+			if err != nil {
+				return time.Time{}, "", err
+			}
+			t, err := claudestt.ReadToken(path)
+			return t.Expires, path, err
+		},
+		ClaudePing: func(ctx context.Context) error {
+			path, err := claudestt.CredentialsPath()
+			if err != nil {
+				return err
+			}
+			return claudestt.New(path, "oat/"+version).Ping(ctx)
 		},
 		MCPStatus: func(ctx context.Context) error {
 			return doctor.MCPStatus(ctx, audio.Exec, exec.LookPath)

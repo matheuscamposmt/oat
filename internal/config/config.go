@@ -12,24 +12,46 @@ import (
 
 // Config holds the values that change how oat records and transcribes.
 type Config struct {
-	Lang       string `toml:"lang"`
-	Model      string `toml:"model"`
-	Echo       string `toml:"echo"`
-	KeepAudio  bool   `toml:"keep_audio"`
-	GroqAPIKey string `toml:"groq_api_key"` // used when GROQ_API_KEY is not set
+	Transcriber string `toml:"transcriber"` // claude or groq
+	Lang        string `toml:"lang"`
+	Model       string `toml:"model"`
+	Echo        string `toml:"echo"`
+	KeepAudio   bool   `toml:"keep_audio"`
+	GroqAPIKey  string `toml:"groq_api_key"` // used when GROQ_API_KEY is not set
 }
 
 // Overrides holds the command flags. An empty string or false keeps the file value.
 type Overrides struct {
-	Lang      string
-	Model     string
-	Echo      string
-	KeepAudio bool
+	Transcriber string
+	Lang        string
+	Model       string
+	Echo        string
+	KeepAudio   bool
 }
 
 // Default returns the configuration that oat uses without a file.
 func Default() Config {
-	return Config{Lang: "pt", Model: "whisper-large-v3-turbo", Echo: "auto"}
+	return Config{Transcriber: "claude", Lang: "pt", Model: "whisper-large-v3-turbo", Echo: "auto"}
+}
+
+// ClaudeModel is the model name that oat saves in meta.json for the Claude backend.
+const ClaudeModel = "claude-voice-stream"
+
+// MeetingModel returns the model name to save in meta.json.
+func (c Config) MeetingModel() string {
+	if c.Transcriber == "claude" {
+		return ClaudeModel
+	}
+	return c.Model
+}
+
+// GroqModel returns the Whisper model for a meeting: the one in its meta.json,
+// or the configured one when the meeting used another backend.
+func (c Config) GroqModel(meetingModel string) string {
+	if meetingModel == "" || meetingModel == ClaudeModel {
+		return c.Model
+	}
+	return meetingModel
 }
 
 // Load reads the TOML file at path on top of the defaults. A missing file is not an error.
@@ -47,6 +69,9 @@ func Load(path string) (Config, error) {
 
 // Apply returns the configuration with the flags on top.
 func (c Config) Apply(o Overrides) Config {
+	if o.Transcriber != "" {
+		c.Transcriber = o.Transcriber
+	}
 	if o.Lang != "" {
 		c.Lang = o.Lang
 	}
@@ -64,6 +89,11 @@ func (c Config) Apply(o Overrides) Config {
 
 // Validate returns an error for a value that oat cannot use.
 func (c Config) Validate() error {
+	switch c.Transcriber {
+	case "claude", "groq":
+	default:
+		return fmt.Errorf("transcriber must be claude or groq, not %q", c.Transcriber)
+	}
 	switch c.Echo {
 	case "auto", "on", "off":
 	default:

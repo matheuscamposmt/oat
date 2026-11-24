@@ -50,12 +50,30 @@ func TestParseInterspersed(t *testing.T) {
 	}
 }
 
+func TestMissingClaudeLoginStopsBeforeRecording(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"new"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "no Claude Code login found") {
+		t.Fatalf("got %d %q", code, errOut.String())
+	}
+}
+
+func TestBadTranscriberFlag(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var out, errOut bytes.Buffer
+	if code := run([]string{"new", "--transcriber", "openai"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "transcriber must be claude or groq") {
+		t.Fatalf("got %d %q", code, errOut.String())
+	}
+}
+
 func TestMissingKeyStopsBeforeRecording(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GROQ_API_KEY", "")
 	var out, errOut bytes.Buffer
-	if code := run([]string{"new"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "no Groq API key found") {
+	if code := run([]string{"new", "--transcriber", "groq"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "no Groq API key found") {
 		t.Fatalf("got %d %q", code, errOut.String())
 	}
 }
